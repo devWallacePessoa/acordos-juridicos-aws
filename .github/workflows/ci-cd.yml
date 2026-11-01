@@ -1,0 +1,86 @@
+name: CI/CD - Acordos Juridicos AWS
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  AWS_REGION: "us-east-1"
+
+jobs:
+  lint-and-test:
+    name: Qualidade, Lint (Ruff) e Testes (Pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Analisar código com Ruff (Linter)
+        run: |
+          ruff check shared services tests
+
+      - name: Executar Testes Unitários e de Integração com Cobertura
+        run: |
+          pytest --cov=shared --cov=services --cov-report=term-missing --cov-fail-under=85
+
+  terraform-validate:
+    name: Validação de Infraestrutura como Código (Terraform)
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.5"
+
+      - name: Terraform Format Check & Validate
+        working-directory: infra/terraform
+        run: |
+          terraform fmt -check
+          terraform init -backend=false
+          terraform validate
+
+  docker-build-and-deploy:
+    name: Build Docker & Deploy AWS ECR/ECS
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, terraform-validate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Validar build da imagem Docker
+        run: |
+          docker build -t acordos-juridicos-aws:${{ github.sha }} .
+
+      - name: Publicar no Amazon ECR (quando credenciais AWS estiverem configuradas)
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ secrets.AWS_ECR_REGISTRY }}
+          docker tag acordos-juridicos-aws:${{ github.sha }} ${{ secrets.AWS_ECR_REGISTRY }}/acordos-juridicos-prod-repo:latest
+          docker push ${{ secrets.AWS_ECR_REGISTRY }}/acordos-juridicos-prod-repo:latest
