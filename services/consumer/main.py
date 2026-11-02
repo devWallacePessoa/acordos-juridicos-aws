@@ -26,12 +26,16 @@ class ConsumerService:
     ) -> None:
         self.settings = get_settings()
         self.session_factory = session_factory
-        self.sqs_client = sqs_client or boto3.client(
-            "sqs",
-            region_name=self.settings.AWS_REGION,
-            endpoint_url=self.settings.AWS_ENDPOINT_URL,
-            aws_access_key_id=self.settings.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=self.settings.AWS_SECRET_ACCESS_KEY,
+        self.sqs_client = (
+            sqs_client
+            if sqs_client is not None
+            else boto3.client(
+                "sqs",
+                region_name=self.settings.AWS_REGION,
+                endpoint_url=self.settings.AWS_ENDPOINT_URL,
+                aws_access_key_id=self.settings.AWS_ACCESS_KEY_ID,
+                aws_secret_access_key=self.settings.AWS_SECRET_ACCESS_KEY,
+            )
         )
         self.queue_url = queue_url or self._resolve_queue_url()
 
@@ -156,7 +160,11 @@ class ConsumerService:
 def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
     """Handler compatível com AWS Lambda Event Source Mapping para SQS (com BatchItemFailures)."""
     init_db()
-    service = ConsumerService(sqs_client=False)
+    service = ConsumerService(
+        session_factory=SessionLocal,
+        sqs_client=False,
+        queue_url="lambda://event-source-mapping",
+    )
     records: List[Dict[str, Any]] = event.get("Records", []) if isinstance(event, dict) else []
     batch_item_failures: List[Dict[str, str]] = []
 
