@@ -58,7 +58,12 @@ class Settings(BaseSettings):
 
     @property
     def sqlalchemy_database_url(self) -> str:
-        """Retorna a URL de conexão SQLAlchemy configurada."""
+        """Retorna a URL de conexão SQLAlchemy priorizando DB_HOST quando diferente do padrão local."""
+        if self.DB_HOST and self.DB_HOST not in ("localhost", "127.0.0.1"):
+            return (
+                f"postgresql+psycopg2://{self.DB_USER}:{self.DB_PASSWORD}"
+                f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            )
         if self.DATABASE_URL:
             return self.DATABASE_URL
         return (
