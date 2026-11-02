@@ -41,3 +41,9 @@ variable "jwt_secret_key" {
   sensitive   = true
   default     = "super-secret-jwt-key-acordos-juridicos-2026"
 }
+
+variable "api_backend_url" {
+  description = "URL HTTP publica do container ECS Fargate na porta 8000 para integracao com o API Gateway"
+  type        = string
+  default     = "http://127.0.0.1:8000/{proxy}"
+}

@@ -71,17 +71,39 @@ data "aws_subnets" "default" {
   }
 }
 
+resource "aws_security_group" "ecs_sg" {
+  name        = "${var.project_name}-${var.environment}-ecs-sg"
+  description = "Permite entrada HTTP na porta 8000 para a API no ECS Fargate"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    description = "FastAPI HTTP Port 8000"
+    from_port   = 8000
+    to_port     = 8000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
 resource "aws_security_group" "rds_sg" {
   name        = "${var.project_name}-${var.environment}-rds-sg"
   description = "Permite trafego PostgreSQL na porta 5432 dentro da VPC"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
-    description = "PostgreSQL access"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = [data.aws_vpc.default.cidr_block]
+    description     = "PostgreSQL access from VPC and ECS SG"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    cidr_blocks     = [data.aws_vpc.default.cidr_block]
+    security_groups = [aws_security_group.ecs_sg.id]
   }
 
   egress {
@@ -247,4 +269,54 @@ resource "aws_ecs_task_definition" "api_task" {
       }
     }
   ])
+}
+
+resource "aws_ecs_service" "api_service" {
+  name            = "${var.project_name}-${var.environment}-api-service"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.api_task.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = data.aws_subnets.default.ids
+    security_groups  = [aws_security_group.ecs_sg.id]
+    assign_public_ip = true
+  }
+}
+
+# =============================================================================
+# 6. Amazon API Gateway HTTP API (v2)
+# =============================================================================
+
+resource "aws_apigatewayv2_api" "http_api" {
+  name          = "${var.project_name}-${var.environment}-http-api"
+  protocol_type = "HTTP"
+  description   = "API Gateway HTTP para a API de Consulta de Acordos Juridicos"
+
+  cors_configuration {
+    allow_origins = ["*"]
+    allow_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    allow_headers = ["*"]
+  }
+}
+
+resource "aws_apigatewayv2_integration" "api_proxy" {
+  api_id                 = aws_apigatewayv2_api.http_api.id
+  integration_type       = "HTTP_PROXY"
+  integration_method     = "ANY"
+  integration_uri        = var.api_backend_url
+  payload_format_version = "1.0"
+}
+
+resource "aws_apigatewayv2_route" "proxy_route" {
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = "ANY /{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.api_proxy.id}"
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.http_api.id
+  name        = "$default"
+  auto_deploy = true
 }
