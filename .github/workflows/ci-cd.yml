@@ -200,6 +200,17 @@ jobs:
             terraform import aws_apigatewayv2_stage.default "${API_ID}/\$default" || true
           fi
 
+          # Se o banco RDS estiver pausado (stopped) para economia de custos, religa automaticamente antes do deploy
+          RDS_STATUS=$(aws rds describe-db-instances --db-instance-identifier acordos-juridicos-prod-db --region "$AWS_REGION" --query "DBInstances[0].DBInstanceStatus" --output text 2>/dev/null || true)
+          if [ "$RDS_STATUS" = "stopped" ]; then
+            echo "Banco RDS estava pausado (stopped). Iniciando instancia acordos-juridicos-prod-db..."
+            aws rds start-db-instance --db-instance-identifier acordos-juridicos-prod-db --region "$AWS_REGION" > /dev/null
+            aws rds wait db-instance-available --db-instance-identifier acordos-juridicos-prod-db --region "$AWS_REGION"
+          elif [ "$RDS_STATUS" = "stopping" ] || [ "$RDS_STATUS" = "starting" ]; then
+            echo "Aguardando transicao de estado do RDS ($RDS_STATUS -> available)..."
+            aws rds wait db-instance-available --db-instance-identifier acordos-juridicos-prod-db --region "$AWS_REGION" || true
+          fi
+
           terraform apply -auto-approve
 
           # Sincroniza a senha mestre do RDS definida em variables.tf (pois terraform import nao traz a senha)
