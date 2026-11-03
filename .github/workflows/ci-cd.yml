@@ -106,8 +106,14 @@ jobs:
         run: |
           docker build -t acordos-juridicos-aws:${{ github.sha }} .
 
+      - name: Validar credenciais AWS obrigatorias nas Secrets do GitHub
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "::error::As secrets AWS_ACCESS_KEY_ID e/ou AWS_SECRET_ACCESS_KEY nao estao configuradas em Settings -> Secrets and variables -> Actions (Repository secrets)."
+            exit 1
+          fi
+
       - name: Sincronizar Terraform (Backend S3) e Aplicar Infraestrutura na AWS
-        if: env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != ''
         working-directory: infra/terraform
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
@@ -187,7 +193,6 @@ jobs:
           fi
 
       - name: Publicar no Amazon ECR, atualizar ECS Fargate e vincular API Gateway
-        if: env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != ''
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
           ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
