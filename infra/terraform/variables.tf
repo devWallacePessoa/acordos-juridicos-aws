@@ -32,7 +32,7 @@ variable "db_password" {
   description = "Senha do banco de dados PostgreSQL (injetada via TF_VAR_db_password)"
   type        = string
   sensitive   = true
-  default     = "ChangeMeStrongPassword2026!"
+  default     = "CaseAcordos2026!"
 }
 
 variable "jwt_secret_key" {
