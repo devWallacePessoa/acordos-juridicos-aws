@@ -143,9 +143,8 @@ jobs:
 
           terraform init -reconfigure
 
-          # Importa recursos existentes caso o tfstate no S3 esteja na primeira execucao
-          STATE_LIST=$(terraform state list 2>/dev/null || true)
-          if [ -z "$STATE_LIST" ]; then
+          # Importa recursos existentes caso ainda nao constem no tfstate remoto no S3
+          if ! terraform state show aws_ecr_repository.app_repo >/dev/null 2>&1; then
             echo "Sincronizando recursos existentes da AWS para o estado remoto no S3..."
             API_ID=$(aws apigatewayv2 get-apis --region "$AWS_REGION" --query "Items[?Name=='acordos-juridicos-prod-http-api'].ApiId | [0]" --output text)
             INTEGRATION_ID=$(aws apigatewayv2 get-integrations --api-id "$API_ID" --region "$AWS_REGION" --query "Items[0].IntegrationId" --output text)
