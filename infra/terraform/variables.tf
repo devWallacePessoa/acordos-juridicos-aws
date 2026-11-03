@@ -32,7 +32,7 @@ variable "db_password" {
   description = "Senha do banco de dados PostgreSQL (injetada via TF_VAR_db_password)"
   type        = string
   sensitive   = true
-  default     = "ChangeMeStrongPassword2026!"
+  default     = "CaseAcordos2026!"
 }
 
 variable "jwt_secret_key" {
@@ -45,7 +45,7 @@ variable "jwt_secret_key" {
 variable "api_backend_url" {
   description = "URL HTTP publica do container ECS Fargate na porta 8000 para integracao com o API Gateway"
   type        = string
-  default     = "http://18.117.255.220:8000/{proxy}"
+  default     = "http://3.133.91.249:8000/{proxy}"
 }
 
 variable "dd_api_key" {
