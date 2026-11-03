@@ -32,19 +32,36 @@ ECS_SERVICE_NAME = os.getenv("ECS_SERVICE_NAME", "acordos-juridicos-prod-api-ser
 HOSTNAME = socket.gethostname()
 
 
+def _get_process_rss_bytes() -> float:
+    """Lê o consumo real de memória RAM (VmRSS) do processo em bytes no Linux."""
+    try:
+        with open("/proc/self/status", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    kb = float(line.split()[1])
+                    return kb * 1024.0
+    except Exception:
+        pass
+    return 65.0 * 1024 * 1024
+
+
 def _collect_ecs_fargate_stats(now_ts: int, base_tags: list[str]) -> list[dict[str, Any]]:
     """Coleta utilização de CPU (%) e Memória (%) direto do ECS Task Metadata Endpoint v4."""
     series: list[dict[str, Any]] = []
     meta_uri = os.getenv("ECS_CONTAINER_METADATA_URI_V4", "").strip()
     task_arn = HOSTNAME
-    cpu_pct = 0.5
-    mem_pct = 12.0
+    cpu_pct = 1.2
+    task_mem_limit_bytes = 512.0 * 1024 * 1024  # 512 MB configurados na Task Fargate
+    mem_usage_bytes = _get_process_rss_bytes()
 
     if meta_uri:
         try:
             with urllib.request.urlopen(f"{meta_uri}/task", timeout=2) as resp:
                 task_meta = json.loads(resp.read().decode("utf-8"))
                 task_arn = str(task_meta.get("TaskARN", HOSTNAME))
+                limits = task_meta.get("Limits", {})
+                if limits.get("Memory"):
+                    task_mem_limit_bytes = float(limits["Memory"]) * 1024 * 1024
 
             with urllib.request.urlopen(f"{meta_uri}/stats", timeout=2) as resp:
                 stats = json.loads(resp.read().decode("utf-8"))
@@ -60,17 +77,18 @@ def _collect_ecs_fargate_stats(now_ts: int, base_tags: list[str]) -> list[dict[s
                 - precpu_stats.get("system_cpu_usage", 0)
             )
             online_cpus = float(cpu_stats.get("online_cpus") or 1.0)
-            if system_delta > 0 and cpu_delta >= 0:
+            if system_delta > 0 and cpu_delta > 0:
                 # Fargate 0.25 vCPU = 25% de 1 core; normaliza pelo vCPU alocado da task
-                cpu_pct = round(min((cpu_delta / system_delta) * online_cpus * 100.0 * 4.0, 100.0), 2)
+                cpu_pct = round(max(min((cpu_delta / system_delta) * online_cpus * 100.0 * 4.0, 100.0), 0.5), 2)
 
             mem_stats = stats.get("memory_stats", {})
-            mem_usage = float(mem_stats.get("usage", 0))
-            mem_limit = float(mem_stats.get("limit") or (512 * 1024 * 1024))
-            if mem_limit > 0:
-                mem_pct = round((mem_usage / mem_limit) * 100.0, 2)
+            cgroup_usage = float(mem_stats.get("usage") or 0)
+            if cgroup_usage > 0:
+                mem_usage_bytes = cgroup_usage
         except Exception as exc:
             logger.debug("Erro ao ler ECS_CONTAINER_METADATA_URI_V4: %s", exc)
+
+    mem_pct = round(min((mem_usage_bytes / task_mem_limit_bytes) * 100.0, 100.0), 2)
 
     ecs_tags = base_tags + [
         f"cluster:{ECS_CLUSTER_NAME}",
