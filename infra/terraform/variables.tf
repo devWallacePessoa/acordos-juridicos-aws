@@ -41,3 +41,22 @@ variable "jwt_secret_key" {
   sensitive   = true
   default     = "super-secret-jwt-key-acordos-juridicos-2026"
 }
+
+variable "api_backend_url" {
+  description = "URL HTTP publica do container ECS Fargate na porta 8000 para integracao com o API Gateway"
+  type        = string
+  default     = "http://18.117.255.220:8000/{proxy}"
+}
+
+variable "dd_api_key" {
+  description = "API Key do Datadog para envio de metricas e logs (injetada via TF_VAR_dd_api_key)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "dd_site" {
+  description = "Site do Datadog (ex: datadoghq.com, us5.datadoghq.com)"
+  type        = string
+  default     = "datadoghq.com"
+}

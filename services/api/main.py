@@ -1,6 +1,7 @@
 """Ponto de entrada da API FastAPI para Consulta de Acordos Jurídicos."""
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+import asyncio
 from typing import AsyncGenerator
 
 from fastapi import Depends, FastAPI
@@ -9,9 +10,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from services.api.controllers.acordo_controller import auth_router, v1_router
+from services.api.datadog_telemetry import (
+    _infra_metrics_loop,
+    setup_datadog_telemetry,
+)
 from services.api.exceptions import register_exception_handlers
 from services.api.schemas.acordo_schema import HealthCheckResponse
-from shared.config.database import get_db, init_db
+from shared.config.database import engine, get_db, init_db
 from shared.config.logging import get_logger
 
 logger = get_logger(__name__)
@@ -22,12 +27,22 @@ def create_app(initialize_database: bool = True) -> FastAPI:
 
     @asynccontextmanager
     async def app_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        """Inicializa o schema de banco de dados na subida da aplicação quando habilitado."""
+        """Inicializa o schema de banco de dados e coletor Datadog na subida da aplicação."""
         logger.info("Inicializando API de Consulta de Acordos Jurídicos")
+        collector_task = None
         if initialize_database:
             init_db()
-        yield
-        logger.info("Encerrando API de Consulta de Acordos Jurídicos")
+            collector_task = asyncio.create_task(
+                _infra_metrics_loop(db_engine=engine, interval_seconds=30)
+            )
+        try:
+            yield
+        finally:
+            if collector_task is not None:
+                collector_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await collector_task
+            logger.info("Encerrando API de Consulta de Acordos Jurídicos")
 
     app = FastAPI(
         title="API de Consulta de Acordos Jurídicos",
@@ -41,6 +56,8 @@ def create_app(initialize_database: bool = True) -> FastAPI:
         openapi_url="/openapi.json",
         lifespan=app_lifespan,
     )
+
+    setup_datadog_telemetry(app, db_engine=engine)
 
     app.add_middleware(
         CORSMiddleware,

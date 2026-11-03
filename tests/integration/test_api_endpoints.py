@@ -129,3 +129,33 @@ def test_consultar_acordos_detalhe_documentos_e_estatisticas(
     assert validation_422.status_code == 422
     assert validation_422.json()["erro"] == "VALIDATION_ERROR"
 
+
+def test_datadog_telemetry_collection_and_post_mock(monkeypatch: object) -> None:
+    """Valida a coleta de métricas de RDS e SQS/DLQ do módulo datadog_telemetry."""
+    from unittest.mock import MagicMock
+    from services.api import datadog_telemetry
+
+    mock_engine = MagicMock()
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value.scalar.return_value = 1048576
+    mock_engine.connect.return_value.__enter__.return_value = mock_conn
+
+    mock_sqs = MagicMock()
+    mock_sqs.get_queue_url.return_value = {"QueueUrl": "https://sqs.us-east-2.amazonaws.com/123/q"}
+    mock_sqs.get_queue_attributes.return_value = {
+        "Attributes": {
+            "ApproximateNumberOfMessages": "5",
+            "ApproximateNumberOfMessagesNotVisible": "1",
+            "ApproximateNumberOfMessagesDelayed": "0",
+        }
+    }
+    monkeypatch.setattr(datadog_telemetry.boto3, "client", lambda *a, **kw: mock_sqs)
+
+    series = datadog_telemetry._collect_infra_metrics_sync(mock_engine)
+    metric_names = {item["metric"] for item in series}
+    assert "acordos.rds.db_size_mb" in metric_names
+    assert "acordos.rds.table_size_bytes" in metric_names
+    assert "acordos.sqs.messages_visible" in metric_names
+    assert "acordos.sqs.messages_in_flight" in metric_names
+
+
