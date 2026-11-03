@@ -257,7 +257,13 @@ resource "aws_ecs_task_definition" "api_task" {
         { name = "DB_USER", value = var.db_username },
         { name = "DB_PASSWORD", value = var.db_password },
         { name = "JWT_SECRET_KEY", value = var.jwt_secret_key },
-        { name = "AWS_REGION", value = var.aws_region }
+        { name = "AWS_REGION", value = var.aws_region },
+        { name = "DD_API_KEY", value = var.dd_api_key },
+        { name = "DD_SITE", value = var.dd_site },
+        { name = "DD_ENV", value = var.environment },
+        { name = "DD_SERVICE", value = "${var.project_name}-api" },
+        { name = "SQS_QUEUE_NAME", value = aws_sqs_queue.acordos_queue.name },
+        { name = "SQS_DLQ_NAME", value = aws_sqs_queue.acordos_dlq.name }
       ]
       logConfiguration = {
         logDriver = "awslogs"

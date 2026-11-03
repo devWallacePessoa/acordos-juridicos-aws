@@ -47,3 +47,16 @@ variable "api_backend_url" {
   type        = string
   default     = "http://18.117.255.220:8000/{proxy}"
 }
+
+variable "dd_api_key" {
+  description = "API Key do Datadog para envio de metricas e logs (injetada via TF_VAR_dd_api_key)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "dd_site" {
+  description = "Site do Datadog (ex: datadoghq.com, us5.datadoghq.com)"
+  type        = string
+  default     = "datadoghq.com"
+}
