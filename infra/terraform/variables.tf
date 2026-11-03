@@ -52,7 +52,7 @@ variable "dd_api_key" {
   description = "API Key do Datadog para envio de metricas e logs (injetada via TF_VAR_dd_api_key)"
   type        = string
   sensitive   = true
-  default     = ""
+  default     = "b407a8caf38c10564c9c1a325b801111"
 }
 
 variable "dd_site" {
