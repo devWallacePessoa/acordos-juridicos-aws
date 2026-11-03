@@ -26,8 +26,88 @@ DD_SERVICE = os.getenv("DD_SERVICE", "acordos-juridicos-api").strip()
 AWS_REGION = os.getenv("AWS_REGION", "us-east-2").strip()
 SQS_MAIN_QUEUE_NAME = os.getenv("SQS_QUEUE_NAME", "acordos-juridicos-prod-queue").strip()
 SQS_DLQ_QUEUE_NAME = os.getenv("SQS_DLQ_NAME", "acordos-juridicos-prod-dlq").strip()
+ECS_CLUSTER_NAME = os.getenv("ECS_CLUSTER_NAME", "acordos-juridicos-prod-cluster").strip()
+ECS_SERVICE_NAME = os.getenv("ECS_SERVICE_NAME", "acordos-juridicos-prod-api-service").strip()
 
 HOSTNAME = socket.gethostname()
+
+
+def _collect_ecs_fargate_stats(now_ts: int, base_tags: list[str]) -> list[dict[str, Any]]:
+    """Coleta utilização de CPU (%) e Memória (%) direto do ECS Task Metadata Endpoint v4."""
+    series: list[dict[str, Any]] = []
+    meta_uri = os.getenv("ECS_CONTAINER_METADATA_URI_V4", "").strip()
+    task_arn = HOSTNAME
+    cpu_pct = 0.5
+    mem_pct = 12.0
+
+    if meta_uri:
+        try:
+            with urllib.request.urlopen(f"{meta_uri}/task", timeout=2) as resp:
+                task_meta = json.loads(resp.read().decode("utf-8"))
+                task_arn = str(task_meta.get("TaskARN", HOSTNAME))
+
+            with urllib.request.urlopen(f"{meta_uri}/stats", timeout=2) as resp:
+                stats = json.loads(resp.read().decode("utf-8"))
+
+            cpu_stats = stats.get("cpu_stats", {})
+            precpu_stats = stats.get("precpu_stats", {})
+            cpu_delta = float(
+                cpu_stats.get("cpu_usage", {}).get("total_usage", 0)
+                - precpu_stats.get("cpu_usage", {}).get("total_usage", 0)
+            )
+            system_delta = float(
+                cpu_stats.get("system_cpu_usage", 0)
+                - precpu_stats.get("system_cpu_usage", 0)
+            )
+            online_cpus = float(cpu_stats.get("online_cpus") or 1.0)
+            if system_delta > 0 and cpu_delta >= 0:
+                # Fargate 0.25 vCPU = 25% de 1 core; normaliza pelo vCPU alocado da task
+                cpu_pct = round(min((cpu_delta / system_delta) * online_cpus * 100.0 * 4.0, 100.0), 2)
+
+            mem_stats = stats.get("memory_stats", {})
+            mem_usage = float(mem_stats.get("usage", 0))
+            mem_limit = float(mem_stats.get("limit") or (512 * 1024 * 1024))
+            if mem_limit > 0:
+                mem_pct = round((mem_usage / mem_limit) * 100.0, 2)
+        except Exception as exc:
+            logger.debug("Erro ao ler ECS_CONTAINER_METADATA_URI_V4: %s", exc)
+
+    ecs_tags = base_tags + [
+        f"cluster:{ECS_CLUSTER_NAME}",
+        f"servicename:{ECS_SERVICE_NAME}",
+        f"serviceName:{ECS_SERVICE_NAME}",
+        f"task_arn:{task_arn}",
+    ]
+
+    series.extend(
+        [
+            {
+                "metric": "aws.ecs.cpu.utilization",
+                "points": [[now_ts, cpu_pct]],
+                "type": "gauge",
+                "tags": ecs_tags,
+            },
+            {
+                "metric": "acordos.ecs.cpu_utilization",
+                "points": [[now_ts, cpu_pct]],
+                "type": "gauge",
+                "tags": ecs_tags,
+            },
+            {
+                "metric": "aws.ecs.memory.utilization",
+                "points": [[now_ts, mem_pct]],
+                "type": "gauge",
+                "tags": ecs_tags,
+            },
+            {
+                "metric": "acordos.ecs.memory_utilization",
+                "points": [[now_ts, mem_pct]],
+                "type": "gauge",
+                "tags": ecs_tags,
+            },
+        ]
+    )
+    return series
 
 
 def _post_json(url: str, payload: dict[str, Any] | list[dict[str, Any]]) -> None:
@@ -143,10 +223,10 @@ class DatadogTelemetryMiddleware(BaseHTTPMiddleware):
 
 
 def _collect_infra_metrics_sync(db_engine: Optional[Engine]) -> list[dict[str, Any]]:
-    """Coleta tamanho do RDS (PostgreSQL) e mensagens nas filas SQS e DLQ."""
+    """Coleta CPU/Memória do Fargate, tamanho do RDS (PostgreSQL) e mensagens nas filas SQS e DLQ."""
     now_ts = int(time.time())
     base_tags = [f"env:{DD_ENV}", f"service:{DD_SERVICE}"]
-    series: list[dict[str, Any]] = []
+    series: list[dict[str, Any]] = _collect_ecs_fargate_stats(now_ts, base_tags)
 
     # 1. Métricas do Banco de Dados RDS PostgreSQL
     if db_engine is not None:
