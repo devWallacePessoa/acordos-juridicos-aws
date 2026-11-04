@@ -8,7 +8,7 @@ import boto3
 from sqlalchemy.orm import Session
 
 from shared.config.database import SessionLocal, init_db
-from shared.config.logging import get_logger
+from shared.config.logging import get_correlation_id, get_logger, set_correlation_id
 from shared.config.settings import get_settings
 from shared.models.entities import AcordoORM, AutorORM, DocumentoORM
 
@@ -44,6 +44,13 @@ class ConsumerService:
         if self.settings.SQS_QUEUE_URL:
             return self.settings.SQS_QUEUE_URL
         response = self.sqs_client.get_queue_url(QueueName=self.settings.SQS_QUEUE_NAME)
+        return str(response["QueueUrl"])
+
+    def _resolve_dlq_url(self) -> str:
+        """Obtém a URL da fila Dead Letter Queue (DLQ) configurada."""
+        if self.settings.SQS_DLQ_URL:
+            return self.settings.SQS_DLQ_URL
+        response = self.sqs_client.get_queue_url(QueueName=self.settings.SQS_DLQ_NAME)
         return str(response["QueueUrl"])
 
     def process_payload(self, payload: Dict[str, Any]) -> int:
@@ -117,6 +124,9 @@ class ConsumerService:
         for message in messages:
             receipt_handle = message["ReceiptHandle"]
             message_id = message.get("MessageId", "unknown")
+            attrs = message.get("MessageAttributes") or {}
+            cid_attr = attrs.get("CorrelationId", {}).get("StringValue")
+            set_correlation_id(cid_attr)
             try:
                 body = json.loads(message["Body"])
                 self.process_payload(body)
@@ -129,9 +139,56 @@ class ConsumerService:
                 logger.error(
                     "Erro ao processar mensagem do SQS. Mensagem permanecerá para retry/DLQ.",
                     exc_info=True,
-                    extra={"extra_data": {"message_id": message_id, "error": str(exc)}},
+                    extra={
+                        "extra_data": {
+                            "message_id": message_id,
+                            "correlation_id": get_correlation_id(),
+                            "error": str(exc),
+                        }
+                    },
                 )
         return processed_count
+
+    def reprocess_dlq(self, max_messages: int = 10) -> Dict[str, int]:
+        """Lê mensagens retidas na Dead Letter Queue (DLQ), reprocessa de forma idempotente e remove da DLQ."""
+        dlq_url = self._resolve_dlq_url()
+        response = self.sqs_client.receive_message(
+            QueueUrl=dlq_url,
+            MaxNumberOfMessages=min(max(max_messages, 1), 10),
+            WaitTimeSeconds=1,
+            MessageAttributeNames=["All"],
+        )
+        messages: List[Dict[str, Any]] = response.get("Messages", [])
+        reprocessed = 0
+        failed = 0
+
+        for message in messages:
+            receipt_handle = message["ReceiptHandle"]
+            message_id = message.get("MessageId", "unknown")
+            attrs = message.get("MessageAttributes") or {}
+            cid_attr = attrs.get("CorrelationId", {}).get("StringValue")
+            set_correlation_id(cid_attr)
+            try:
+                body = json.loads(message["Body"])
+                self.process_payload(body)
+                self.sqs_client.delete_message(
+                    QueueUrl=dlq_url,
+                    ReceiptHandle=receipt_handle,
+                )
+                reprocessed += 1
+                logger.info(
+                    "Mensagem da DLQ reprocessada com sucesso",
+                    extra={"extra_data": {"message_id": message_id, "correlation_id": get_correlation_id()}},
+                )
+            except Exception as exc:
+                failed += 1
+                logger.error(
+                    "Falha ao reprocessar mensagem da DLQ",
+                    exc_info=True,
+                    extra={"extra_data": {"message_id": message_id, "error": str(exc)}},
+                )
+
+        return {"reprocessed_count": reprocessed, "failed_count": failed}
 
     def run_forever(self) -> None:
         """Executa o loop contínuo de consumo da fila SQS."""

@@ -58,23 +58,38 @@ def test_consultar_acordos_do_autor_hierarquia_completa(
     api_client: TestClient,
     auth_headers: Dict[str, str],
 ) -> None:
-    """Valida o endpoint principal GET /api/v1/autores/{id}/acordos e seu contrato JSON."""
-    response = api_client.get("/api/v1/autores/1/acordos", headers=auth_headers)
-    assert response.status_code == 200
-    payload = response.json()
+    """Valida os endpoints GET /api/v1/autores/{id}/acordos e GET /api/v1/usuarios/{id}/acordos e seu contrato JSON."""
+    for path in ("/api/v1/autores/1/acordos", "/api/v1/usuarios/1/acordos"):
+        response = api_client.get(
+            path,
+            headers={**auth_headers, "X-Correlation-ID": "corr-test-123"},
+        )
+        assert response.status_code == 200
+        assert response.headers.get("X-Correlation-ID") == "corr-test-123"
+        payload = response.json()
 
-    assert payload["autor"]["id"] == 1
-    assert payload["autor"]["nome"] == "Leanne Graham"
-    assert payload["autor"]["endereco"] == "Kulas Light, Apt. 556 - Gwenborough CEP 92998-3874"
-    assert payload["autor"]["empresa"] == {
-        "nome": "Romaguera-Crona",
-        "segmento": "harness real-time e-markets",
-    }
-    assert len(payload["acordos"]) == 2
-    assert payload["acordos"][0]["id"] == 10
-    assert payload["acordos"][0]["titulo"] == "quidem molestiae enim"
-    assert len(payload["acordos"][0]["documentos"]) == 2
-    assert payload["acordos"][0]["documentos"][0]["thumbnailUrl"] == "https://via.placeholder.com/150/92c952"
+        assert payload["autor"]["id"] == 1
+        assert payload["autor"]["nome"] == "Leanne Graham"
+        assert payload["autor"]["endereco"] == "Kulas Light, Apt. 556 - Gwenborough CEP 92998-3874"
+        assert payload["autor"]["empresa"] == {
+            "nome": "Romaguera-Crona",
+            "segmento": "harness real-time e-markets",
+        }
+        assert payload["resumo"] == {
+            "quantidadeAcordos": 2,
+            "quantidadeDocumentos": 2,
+        }
+        assert len(payload["acordos"]) == 2
+        assert payload["acordos"][0]["id"] == 10
+        assert payload["acordos"][0]["titulo"] == "quidem molestiae enim"
+        assert payload["acordos"][0]["quantidadeDocumentos"] == 2
+        assert len(payload["acordos"][0]["documentos"]) == 2
+        assert payload["acordos"][0]["documentos"][0]["thumbnailUrl"] == "https://via.placeholder.com/150/92c952"
+
+    # Testa retorno HTTP 400 para id inválido (<= 0) conforme especificação do Case
+    bad_id_resp = api_client.get("/api/v1/usuarios/0/acordos", headers=auth_headers)
+    assert bad_id_resp.status_code == 400
+    assert bad_id_resp.json()["erro"] == "INVALID_ID"
 
 
 def test_consultar_acordos_detalhe_documentos_e_estatisticas(
@@ -157,5 +172,32 @@ def test_datadog_telemetry_collection_and_post_mock(monkeypatch: object) -> None
     assert "acordos.rds.table_size_bytes" in metric_names
     assert "acordos.sqs.messages_visible" in metric_names
     assert "acordos.sqs.messages_in_flight" in metric_names
+
+
+def test_dlq_reprocessar_endpoint(
+    api_client: TestClient,
+    auth_headers: Dict[str, str],
+    monkeypatch: object,
+) -> None:
+    """Valida o endpoint POST /api/v1/dlq/reprocessar para reprocessamento sob demanda da DLQ."""
+    from services.api.controllers import acordo_controller
+
+    class DummyConsumer:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def reprocess_dlq(self, max_messages: int = 10) -> Dict[str, int]:
+            return {"reprocessed_count": 2, "failed_count": 0}
+
+    monkeypatch.setattr(acordo_controller, "ConsumerService", DummyConsumer)
+    resp = api_client.post(
+        "/api/v1/dlq/reprocessar?max_messages=5",
+        headers={**auth_headers, "X-Correlation-ID": "dlq-corr-999"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reprocessed_count"] == 2
+    assert body["failed_count"] == 0
+    assert body["correlation_id"] == "dlq-corr-999"
 
 

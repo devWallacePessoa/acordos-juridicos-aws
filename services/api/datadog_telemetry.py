@@ -15,6 +15,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from shared.config.logging import set_correlation_id
+
 logger = logging.getLogger("datadog_telemetry")
 
 # Configurações via variáveis de ambiente
@@ -171,15 +173,18 @@ async def send_dd_log(log_entry: dict[str, Any]) -> None:
 
 
 class DatadogTelemetryMiddleware(BaseHTTPMiddleware):
-    """Intercepta requisições HTTP para contabilizar total, sucesso/erro, latência e logs."""
+    """Intercepta requisições HTTP para contabilizar total, sucesso/erro, latência, correlation_id e logs."""
 
     async def dispatch(self, request: Request, call_next: Any) -> Any:
         start_time = time.perf_counter()
         status_code = 500
+        incoming_cid = request.headers.get("X-Correlation-ID") or request.headers.get("x-correlation-id")
+        correlation_id = set_correlation_id(incoming_cid)
 
         try:
             response = await call_next(request)
             status_code = response.status_code
+            response.headers["X-Correlation-ID"] = correlation_id
             return response
         finally:
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
@@ -225,7 +230,8 @@ class DatadogTelemetryMiddleware(BaseHTTPMiddleware):
                 "hostname": HOSTNAME,
                 "service": DD_SERVICE,
                 "status": log_status,
-                "message": f"{method} {path} -> {status_code} ({duration_ms}ms)",
+                "correlation_id": correlation_id,
+                "message": f"[{correlation_id}] {method} {path} -> {status_code} ({duration_ms}ms)",
                 "http": {
                     "method": method,
                     "status_code": status_code,

@@ -330,11 +330,14 @@ locals {
     "POST /api/v1/auth/token",
     "GET /api/v1/autores",
     "GET /api/v1/autores/{autor_id}/acordos",
+    "GET /api/v1/usuarios",
+    "GET /api/v1/usuarios/{autor_id}/acordos",
     "GET /api/v1/acordos",
     "GET /api/v1/acordos/{acordo_id}",
     "GET /api/v1/acordos/{acordo_id}/documentos",
     "GET /api/v1/documentos/{documento_id}",
     "GET /api/v1/estatisticas",
+    "POST /api/v1/dlq/reprocessar",
   ])
 }
 

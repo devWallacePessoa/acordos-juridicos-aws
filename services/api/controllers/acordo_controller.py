@@ -17,6 +17,7 @@ from services.api.schemas.acordo_schema import (
     AcordoSchema,
     AutorComAcordosSchema,
     AutorResumoSchema,
+    DLQRedriveResponse,
     DocumentoSchema,
     EstatisticaGeralResponse,
     PaginatedResponse,
@@ -24,7 +25,9 @@ from services.api.schemas.acordo_schema import (
     TokenResponse,
 )
 from services.api.services.acordo_service import AcordoService
-from shared.config.database import get_db
+from services.consumer.main import ConsumerService
+from shared.config.database import SessionLocal, get_db
+from shared.config.logging import get_correlation_id
 from shared.config.settings import Settings, get_settings
 
 auth_router = APIRouter(prefix="/api/v1/auth", tags=["Autenticação"])
@@ -71,22 +74,46 @@ def login_for_access_token(
     summary="Listar Autores de Ações Judiciais",
     description="Retorna lista paginada de autores cadastrados com filtros por nome e segmento empresarial.",
 )
+@v1_router.get(
+    "/usuarios",
+    response_model=PaginatedResponse[AutorResumoSchema],
+    summary="Listar Autores/Usuários de Ações Judiciais (Rota do Case)",
+    description="Alias compatível com a nomenclatura /api/v1/usuarios do Case Técnico.",
+)
 def listar_autores(
     page: int = Query(1, ge=1, description="Número da página"),
     size: int = Query(10, ge=1, le=100, description="Itens por página"),
     nome: Optional[str] = Query(None, description="Filtro parcial por nome do autor"),
     segmento: Optional[str] = Query(None, description="Filtro parcial por segmento empresarial"),
+    mascarar_dados: bool = Query(
+        False, description="Mascara dados pessoais sensíveis (e-mail, telefone e endereço) conforme LGPD"
+    ),
     service: AcordoService = Depends(get_acordo_service),
 ) -> PaginatedResponse[AutorResumoSchema]:
-    return service.listar_autores(page=page, size=size, nome=nome, segmento=segmento)
+    return service.listar_autores(
+        page=page,
+        size=size,
+        nome=nome,
+        segmento=segmento,
+        mascarar_dados=mascarar_dados,
+    )
 
 
+@v1_router.get(
+    "/usuarios/{autor_id}/acordos",
+    response_model=AutorComAcordosSchema,
+    summary="Consultar Acordos e Documentos por ID do Usuário/Autor (Endpoint Sugerido no Case)",
+    description=(
+        "Retorna os dados consolidados do Autor (1) -> Resumo -> (N) Acordos (1) -> (N) Documentos "
+        "seguindo o De-Para oficial do Case Técnico (/api/v1/usuarios/{id}/acordos)."
+    ),
+)
 @v1_router.get(
     "/autores/{autor_id}/acordos",
     response_model=AutorComAcordosSchema,
     summary="Consultar Autor e Hierarquia Completa de Acordos e Documentos",
     description=(
-        "Retorna os dados consolidados do Autor (1) -> (N) Acordos (1) -> (N) Documentos "
+        "Retorna os dados consolidados do Autor (1) -> Resumo -> (N) Acordos (1) -> (N) Documentos "
         "seguindo o De-Para oficial do Case Técnico."
     ),
 )
@@ -95,10 +122,23 @@ def obter_acordos_do_autor(
     incluir_documentos: bool = Query(
         True, description="Define se a lista de documentos de cada acordo deve ser incluída"
     ),
+    doc_page: Optional[int] = Query(
+        None, ge=1, description="Página opcional para paginação de documentos dentro de cada acordo"
+    ),
+    doc_size: Optional[int] = Query(
+        None, ge=1, le=100, description="Quantidade de documentos por página dentro de cada acordo"
+    ),
+    mascarar_dados: bool = Query(
+        False, description="Mascara dados pessoais do autor (e-mail, telefone e endereço) conforme LGPD"
+    ),
     service: AcordoService = Depends(get_acordo_service),
 ) -> AutorComAcordosSchema:
     return service.obter_acordos_por_autor(
-        autor_id=autor_id, incluir_documentos=incluir_documentos
+        autor_id=autor_id,
+        incluir_documentos=incluir_documentos,
+        doc_page=doc_page,
+        doc_size=doc_size,
+        mascarar_dados=mascarar_dados,
     )
 
 
@@ -175,3 +215,24 @@ def obter_estatisticas(
     service: AcordoService = Depends(get_acordo_service),
 ) -> EstatisticaGeralResponse:
     return service.obter_estatisticas()
+
+
+@v1_router.post(
+    "/dlq/reprocessar",
+    response_model=DLQRedriveResponse,
+    summary="Reprocessar Mensagens da Dead Letter Queue (DLQ)",
+    description=(
+        "Consome mensagens retidas na fila DLQ do AWS SQS e executa o Upsert idempotente "
+        "no PostgreSQL, removendo da DLQ as mensagens processadas com sucesso."
+    ),
+)
+def reprocessar_dlq(
+    max_messages: int = Query(10, ge=1, le=10, description="Quantidade máxima de mensagens da DLQ para reprocessar"),
+) -> DLQRedriveResponse:
+    consumer = ConsumerService(session_factory=SessionLocal)
+    resultado = consumer.reprocess_dlq(max_messages=max_messages)
+    return DLQRedriveResponse(
+        reprocessed_count=resultado["reprocessed_count"],
+        failed_count=resultado["failed_count"],
+        correlation_id=get_correlation_id(),
+    )

@@ -43,9 +43,29 @@ class AcordoSchema(BaseModel):
 
     id: int = Field(..., description="Identificador único do acordo", examples=[1])
     titulo: str = Field(..., description="Título do acordo jurídico", examples=["quidem molestiae enim"])
+    quantidadeDocumentos: int = Field(
+        0,
+        description="Quantidade total de documentos comprobatórios vinculados ao acordo",
+        examples=[50],
+    )
     documentos: List[DocumentoSchema] = Field(
         default_factory=list,
         description="Lista de documentos comprobatórios do acordo",
+    )
+
+
+class ResumoAcordosSchema(BaseModel):
+    """Resumo consolidado de quantidades de acordos e documentos do autor."""
+
+    quantidadeAcordos: int = Field(
+        0,
+        description="Quantidade total de acordos do autor",
+        examples=[10],
+    )
+    quantidadeDocumentos: int = Field(
+        0,
+        description="Quantidade total de documentos somando todos os acordos do autor",
+        examples=[500],
     )
 
 
@@ -73,11 +93,15 @@ class AutorResumoSchema(AutorSchema):
 
 
 class AutorComAcordosSchema(BaseModel):
-    """Estrutura hierárquica completa: Autor (1) -> (N) Acordos (1) -> (N) Documentos."""
+    """Estrutura hierárquica completa: Autor (1) -> Resumo -> (N) Acordos (1) -> (N) Documentos."""
 
     model_config = ConfigDict(from_attributes=True)
 
     autor: AutorSchema = Field(..., description="Dados do autor da ação judicial")
+    resumo: ResumoAcordosSchema = Field(
+        default_factory=ResumoAcordosSchema,
+        description="Resumo quantitativo de acordos e documentos do autor",
+    )
     acordos: List[AcordoSchema] = Field(
         default_factory=list,
         description="Lista de acordos jurídicos e respectivos documentos do autor",
@@ -132,3 +156,11 @@ class HealthCheckResponse(BaseModel):
     status: str = Field(..., examples=["healthy"])
     service: str = Field(..., examples=["acordos-juridicos-api"])
     database: str = Field(..., examples=["connected"])
+
+
+class DLQRedriveResponse(BaseModel):
+    """Resultado do reprocessamento sob demanda da fila Dead Letter Queue (DLQ)."""
+
+    reprocessed_count: int = Field(..., description="Quantidade de mensagens reprocessadas com sucesso")
+    failed_count: int = Field(..., description="Quantidade de mensagens que voltaram a falhar")
+    correlation_id: str = Field(..., description="Identificador de correlação da operação")
