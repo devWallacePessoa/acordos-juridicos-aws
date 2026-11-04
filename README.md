@@ -34,9 +34,9 @@ flowchart TB
     end
 
     %% Governança, Observabilidade e CI/CD
-    subgraph Governanca["5. Observabilidade, Segredos e CI/CD"]
+    subgraph Governanca["5. Observabilidade, Segurança e CI/CD"]
         CW_DD["📊 CloudWatch Logs & Datadog\n(Logs JSON, Correlation-ID, Métricas RDS/SQS/CPU)"]
-        SM["🔐 AWS Secrets Manager & IAM\n(Credenciais, JWT Secret, Permissões SQS)"]
+        IAM_SEC["🔐 AWS IAM, Security Groups & GitHub Secrets\n(Roles do ECS, Acesso SQS e Variáveis de Ambiente)"]
         CICD["🚀 GitHub Actions + Terraform (S3) + ECR\n(Lint, Pytest, Build Imagem e Deploy Automático)"]
     end
 
@@ -55,7 +55,7 @@ flowchart TB
 
     %% Ligações de Governança
     ECS -.->|"Envia Logs e Métricas"| CW_DD
-    SM -.->|"Injeta Variáveis e Roles"| ECS
+    IAM_SEC -.->|"Permissões IAM e Configs"| ECS
     CICD -.->|"Provisiona Infra e Atualiza Imagem"| ECS & APIGW & SQS & RDS
 ```
 
