@@ -164,3 +164,13 @@ class DLQRedriveResponse(BaseModel):
     reprocessed_count: int = Field(..., description="Quantidade de mensagens reprocessadas com sucesso")
     failed_count: int = Field(..., description="Quantidade de mensagens que voltaram a falhar")
     correlation_id: str = Field(..., description="Identificador de correlação da operação")
+
+
+
+class CargaSyncResponse(BaseModel):
+    """Resultado da execução completa do fluxo de carga (API Pública -> SQS -> Consumer -> RDS)."""
+
+    mensagens_publicadas_sqs: int = Field(..., description="Total de autores publicados na fila SQS pelo Producer")
+    mensagens_consumidas_rds: int = Field(..., description="Total de mensagens lidas do SQS e persistidas no RDS pelo Consumer")
+    message_ids: List[str] = Field(default_factory=list, description="IDs das mensagens geradas no AWS SQS")
+    correlation_id: str = Field(..., description="Correlation-ID compartilhado entre Producer, SQS, Consumer e API")

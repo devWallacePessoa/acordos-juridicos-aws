@@ -6,51 +6,57 @@ Solução completa ponta a ponta desenvolvida em **Python 3.12**, **FastAPI**, *
 
 ## 1. Parte 1 – Desenho da Arquitetura (AWS)
 
-A arquitetura adota o padrão **Event-Driven Microservices (Produtor → Fila SQS → Consumidor → Banco Relacional → API REST via API Gateway)**, separando claramente o **fluxo assíncrono de ingestão/carga** do **fluxo síncrono de consulta**.
+A arquitetura centraliza a computação no **Amazon ECS Fargate** (executando a **API FastAPI**, o **Producer** e o **Consumer**), integrando o **Amazon API Gateway** na entrada, a **API Pública Externa** na ingestão, o **Amazon SQS + DLQ** para mensageria assíncrona resiliente e o **Amazon RDS (PostgreSQL 16)** para persistência relacional.
 
 ```mermaid
 flowchart TB
-    subgraph Externa["1. Fonte Externa (Síncrono)"]
-        JP["API Pública JSONPlaceholder\n(/users, /albums, /photos)"]
+    %% Topo: API Pública Externa
+    EXT["🌐 API Pública Externa\n(JSONPlaceholder: /users, /albums, /photos)"]
+
+    %% Linha Central: Entrada (Esquerda) -> ECS Fargate (Centro) -> SQS + DLQ (Direita)
+    subgraph Entrada["1. Entrada Síncrona (HTTPS)"]
+        CLIENT["💻 Cliente / Insomnia\n(Bearer JWT / X-API-Key)"]
+        APIGW["🚪 Amazon API Gateway\n(HTTP API v2 - Rotas & CORS)"]
     end
 
-    subgraph Ingestao["2. Ingestão e Mensageria Assíncrona (AWS / LocalStack)"]
-        EB["Amazon EventBridge\n(Agendamento / Trigger)"]
-        PROD["Serviço Producer\n(HTTPX + Retry Exponencial + De-Para)"]
-        SQS["AWS SQS Main Queue\n(acordos-juridicos-prod-queue)"]
-        DLQ["AWS SQS Dead Letter Queue\n(acordos-juridicos-prod-dlq)\nmaxReceiveCount = 3"]
+    subgraph Computacao["2. Computação Central (AWS ECS)"]
+        ECS["🐳 Amazon ECS Fargate\nContainer Python 3.12\n• API FastAPI (Consulta)\n• Producer (Ingestão + De-Para)\n• Consumer (Worker SQS -> RDS)"]
     end
 
-    subgraph Processamento["3. Processamento e Persistência"]
-        CONS["Serviço Consumer\n(Worker SQS / Lambda Handler\nUpsert Transacional Idempotente)"]
-        RDS[("Amazon RDS PostgreSQL 16\nModelagem 3NF: autores, acordos, documentos")]
+    subgraph Mensageria["3. Mensageria Assíncrona (AWS SQS)"]
+        SQS["📩 Amazon SQS (Fila Principal)\nacordos-juridicos-prod-queue"]
+        DLQ["⚠️ Amazon SQS (Dead Letter Queue)\nacordos-juridicos-prod-dlq\n(Redrive: maxReceiveCount = 3)"]
     end
 
-    subgraph Exposicao["4. Exposição Síncrona (API de Consulta)"]
-        CLIENT["Clientes / Sistemas Jurídicos / Insomnia"]
-        APIGW["Amazon API Gateway HTTP v2\n(TLS / Rotas / Throttling / CORS)"]
-        ECS["Amazon ECS Fargate\n(FastAPI + Uvicorn + JWT / X-API-Key)"]
+    %% Base: Banco de Dados Relacional
+    subgraph Banco["4. Persistência Relacional (3NF)"]
+        RDS[("🐘 Amazon RDS PostgreSQL 16\nTabelas: autores, acordos, documentos")]
     end
 
-    subgraph Governanca["5. Observabilidade, Segredos e CI/CD"]
-        CW_DD["AWS CloudWatch Logs & Datadog\n(Logs JSON, Correlation-ID, APM/Métricas)"]
-        SM["AWS Secrets Manager & IAM Roles\n(Credenciais RDS, JWT Secret, API Keys)"]
-        CICD["GitHub Actions + Terraform (S3 State)\n(Ruff, Pytest, ECR Push, Deploy ECS/APIGW)"]
+    %% Governança, Observabilidade e CI/CD
+    subgraph Governanca["5. Observabilidade, Segurança e CI/CD"]
+        CW_DD["📊 CloudWatch Logs & Datadog\n(Logs JSON, Correlation-ID, Métricas RDS/SQS/CPU)"]
+        IAM_SEC["🔐 AWS IAM, Security Groups & GitHub Secrets\n(Roles do ECS, Acesso SQS e Variáveis de Ambiente)"]
+        CICD["🚀 GitHub Actions + Terraform (S3) + ECR\n(Lint, Pytest, Build Imagem e Deploy Automático)"]
     end
 
-    EB -->|"Dispara carga"| PROD
-    PROD -->|"1. HTTP GET Síncrono\n(Retry + Backoff)"| JP
-    PROD -->|"2. Publica Evento Canônico\n(Assíncrono + CorrelationId)"| SQS
-    SQS -.->|"Falha após 3 tentativas\n(Redrive Policy)"| DLQ
-    SQS -->|"3. Long Polling Assíncrono\n(Batch até 10 msgs)"| CONS
-    DLQ -.->|"Reprocessamento sob demanda\n(POST /api/v1/dlq/reprocessar)"| CONS
-    CONS -->|"4. Transação ACID\n(session.merge Upsert)"| RDS
-    CLIENT -->|"5. HTTPS Síncrono\n(Bearer JWT / X-API-Key)"| APIGW
-    APIGW -->|"6. HTTP Proxy Síncrono"| ECS
-    ECS -->|"7. Consulta SQL Otimizada\n(selectinload)"| RDS
-    PROD & CONS & ECS -.->|"Logs JSON + Métricas"| CW_DD
-    SM -.->|"Injeta Segredos em Runtime"| ECS & CONS
-    CICD -.->|"Provisiona e Atualiza"| APIGW & ECS & RDS & SQS
+    %% Ligações Síncronas (Setas Contínuas)
+    CLIENT -->|"1. Requisição HTTPS"| APIGW
+    APIGW -->|"2. Proxy HTTP (Porta 8000)"| ECS
+    ECS -->|"6. Upsert ACID / SELECT (Porta 5432)"| RDS
+
+    %% Ligações de Carga e Mensageria (Setas Tracejadas como no seu desenho)
+    ECS -.->|"3a. Producer: GET Dados"| EXT
+    EXT -.->|"3b. JSON (Users/Albums/Photos)"| ECS
+    ECS -.->|"4. Producer: SendMessage"| SQS
+    SQS -.->|"5. Consumer: ReceiveMessage"| ECS
+    SQS -.->|"Falha após 3 tentativas"| DLQ
+    DLQ -.->|"Reprocessamento (/dlq/reprocessar)"| ECS
+
+    %% Ligações de Governança
+    ECS -.->|"Envia Logs e Métricas"| CW_DD
+    IAM_SEC -.->|"Permissões IAM e Configs"| ECS
+    CICD -.->|"Provisiona Infra e Atualiza Imagem"| ECS & APIGW & SQS & RDS
 ```
 
 ### 1.1. Integrações Síncronas vs. Assíncronas
@@ -69,17 +75,17 @@ Foi escolhido o **PostgreSQL 16 (Amazon RDS)** em vez de um banco NoSQL pelos se
 
 ### 1.3. Do Ambiente Local (LocalStack + Docker) para Produção na AWS
 - **No ambiente local (`docker-compose.yml`)**: O container **LocalStack** emula a API do AWS SQS em `http://localstack:4566`, e o serviço `sqs-init` cria automaticamente a fila principal (`acordos-juridicos-queue`) e a DLQ (`acordos-juridicos-dlq`) com `RedrivePolicy`.
-- **Em produção na AWS (`us-east-2`)**: Nenhuma linha de código muda. Basta omitir/deixar vazia a variável `AWS_ENDPOINT_URL` e utilizar as IAM Roles da Task ECS / Lambda. O SDK `boto3` passa a se conectar nativamente ao **Amazon SQS** gerenciado, e a string de conexão aponta para a instância **Amazon RDS PostgreSQL**.
+- **Em produção na AWS (`us-east-2`)**: Nenhuma linha de código muda. Basta omitir/deixar vazia a variável `AWS_ENDPOINT_URL` e utilizar as IAM Roles da Task no **Amazon ECS Fargate**. O SDK `boto3` passa a se conectar nativamente ao **Amazon SQS** gerenciado, e a string de conexão aponta para a instância **Amazon RDS PostgreSQL**.
 
 ### 1.4. Diferencial: Comparativo de Computação na AWS (Lambda vs. ECS Fargate vs. EKS)
 
-| Critério | AWS Lambda | Amazon ECS Fargate *(Escolhido para a API)* | Amazon EKS (Kubernetes) |
+| Critério | AWS Lambda | Amazon ECS Fargate *(Escolhido no Projeto)* | Amazon EKS (Kubernetes) |
 | :--- | :--- | :--- | :--- |
-| **Custo** | Cobrança por invocação e ms de execução (excelente para cargas esporádicas como Producer/Consumer). | Cobrança por vCPU/Memória provisionada por segundo (`0.25 vCPU / 512 MB` ≈ baixo custo previsível; pode zerar `desiredCount=0` fora de uso). | Alto custo fixo inicial ($73+/mês apenas pelo Control Plane por cluster, mais nós EC2/Fargate). |
-| **Escalabilidade** | Escala de 0 a milhares de execuções simultâneas instantaneamente; sujeito a *Cold Start* e necessidade de *RDS Proxy* para não esgotar conexões PostgreSQL. | Escala horizontal automática de containers sem *Cold Start* por requisição; mantém *Connection Pool* SQLAlchemy ativo e estável com o RDS. | Altíssima escalabilidade (HPA/Karpenter), ideal apenas para dezenas/centenas de microsserviços complexos. |
-| **Operação** | Zero gerenciamento de servidor; limite máximo de execução de 15 minutos por invocação. | Serverless para containers: sem gerenciamento de máquinas EC2, integração nativa com ALB/API Gateway, CloudWatch e ECR. | Alta complexidade operacional (atualização de versão do K8s, CNI, Ingress Controllers, RBAC). |
+| **Custo** | Cobrança por invocação e ms de execução; porém, com PostgreSQL sob pico, exige contratar *AWS RDS Proxy* (~US$ 15/mês fixos). | Cobrança por vCPU/Memória provisionada por segundo (`0.25 vCPU / 512 MB` ≈ baixo custo previsível; pode zerar `desiredCount=0` fora de uso). | Alto custo fixo inicial ($73+/mês apenas pelo Control Plane por cluster, mais nós EC2/Fargate). |
+| **Escalabilidade** | Escala de 0 a milhares de execuções simultâneas instantaneamente; sujeito a *Cold Start* e esgotamento de conexões do PostgreSQL. | Escala horizontal automática de containers sem *Cold Start*; mantém *Connection Pool* SQLAlchemy ativo e estável com o RDS. | Altíssima escalabilidade (HPA/Karpenter), ideal apenas para dezenas/centenas de microsserviços complexos. |
+| **Operação** | Zero gerenciamento de servidor; limite máximo de execução de 15 minutos por invocação. | Serverless para containers: usa a exata mesma imagem `Dockerfile` do Docker Compose local, integrando com API Gateway, ECR, CloudWatch e Datadog. | Alta complexidade operacional (atualização de versão do K8s, CNI, Ingress Controllers, RBAC). |
 
-> **Conclusão Arquitetural**: O **ECS Fargate** oferece o melhor equilíbrio custo-benefício e operacional para a **API FastAPI** (sem *cold start*, mantendo pool de conexões com o RDS e telemetria contínua com o Datadog), enquanto o código do **Producer** e do **Consumer** foi escrito de forma híbrida (suportando execução tanto como Worker em Container quanto via `lambda_handler` no **AWS Lambda**).
+> **Conclusão Arquitetural**: O **Amazon ECS Fargate** foi escolhido para rodar a aplicação (sem *cold start*, mantendo pool de conexões ativo com o RDS PostgreSQL sem custo extra de RDS Proxy, telemetria contínua com o Datadog e 100% de paridade com os containers do Docker Compose local).
 
 ---
 
@@ -159,6 +165,7 @@ curl -X GET "http://localhost:8000/api/v1/usuarios/1/acordos?doc_page=1&doc_size
 | `GET` | `/api/v1/acordos/{acordo_id}/documentos` | Lista os documentos de um acordo específico |
 | `GET` | `/api/v1/documentos/{documento_id}` | Consulta um documento específico pelo ID |
 | `GET` | `/api/v1/estatisticas` | Indicadores consolidados da base de acordos |
+| `POST` | `/api/v1/carga/sincronizar` | Executa o fluxo completo sob demanda (API Pública $\rightarrow$ SQS $\rightarrow$ Consumer $\rightarrow$ RDS) |
 | `POST` | `/api/v1/dlq/reprocessar` | **Diferencial**: Reprocessa mensagens retidas na fila DLQ de forma idempotente |
 
 ---
@@ -197,7 +204,7 @@ Em conformidade com a **LGPD (Lei Geral de Proteção de Dados - Lei nº 13.709/
    - **Minimização e Mascaramento Sob Demanda**: A API expõe apenas os campos estritamente necessários ao domínio jurídico e oferece o parâmetro `mascarar_dados=true` (`GET /api/v1/usuarios/{id}/acordos?mascarar_dados=true`), que retorna e-mail (`S***@april.biz`), telefone (`***-6442`) e logradouro (`*** - Gwenborough CEP 92998-3874`) anonimizados para perfis de consulta restritos.
 3. **No Banco de Dados (`Amazon RDS PostgreSQL`)**:
    - **Criptografia em Repouso e em Trânsito**: O RDS PostgreSQL opera com `storage_encrypted = true` (AWS KMS) para dados em disco e conexões exigindo SSL/TLS.
-   - **Isolamento de Rede e Gestão de Segredos**: Em produção, o banco é protegido por *Security Groups* restritivos (aceitando tráfego na porta `5432` exclusivamente das Tasks do ECS/Consumer), credenciais gerenciadas via **AWS Secrets Manager** (sem senhas *hardcoded* no código) e controle de acesso baseado em menor privilégio (IAM Roles).
+   - **Isolamento de Rede e Gestão de Segredos**: Em produção, o banco é protegido por *Security Groups* restritivos (`rds.tf`), variáveis sensíveis injetadas via **GitHub Encrypted Secrets** na Task Definition do ECS (sem senhas *hardcoded* no código) e controle de acesso baseado em menor privilégio via **AWS IAM Roles** (`network_iam.tf`).
 
 ---
 

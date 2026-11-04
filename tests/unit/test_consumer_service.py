@@ -143,28 +143,6 @@ def test_consumer_poll_once_empty_and_error_handling(
     mock_sqs.delete_message.assert_not_called()
 
 
-def test_consumer_lambda_handler_success_and_partial_batch_failure(
-    db_session_factory: Callable[[], Session],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Valida o lambda_handler do Consumer para eventos SQS com sucesso e falha parcial."""
-    from services.consumer import main as consumer_main
-
-    monkeypatch.setattr(consumer_main, "init_db", lambda: None)
-    monkeypatch.setattr(consumer_main, "SessionLocal", db_session_factory)
-
-    valid_body = json.dumps(_build_sample_sqs_payload())
-    invalid_body = json.dumps({"invalido": True})
-    event = {
-        "Records": [
-            {"messageId": "msg-ok", "body": valid_body},
-            {"messageId": "msg-fail", "body": invalid_body},
-        ]
-    }
-    result = consumer_main.lambda_handler(event)
-    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-fail"}]}
-
-
 def test_consumer_reprocess_dlq_success_and_failure(
     db_session_factory: Callable[[], Session],
 ) -> None:

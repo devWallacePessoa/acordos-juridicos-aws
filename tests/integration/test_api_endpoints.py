@@ -201,3 +201,54 @@ def test_dlq_reprocessar_endpoint(
     assert body["correlation_id"] == "dlq-corr-999"
 
 
+def test_sincronizar_carga_completa_endpoint(
+    api_client: TestClient,
+    auth_headers: Dict[str, str],
+    monkeypatch: object,
+) -> None:
+    """Valida o endpoint POST /api/v1/carga/sincronizar (Producer -> SQS -> Consumer -> RDS)."""
+    from services.api.controllers import acordo_controller
+
+    class DummyExtClient:
+        def __enter__(self) -> "DummyExtClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def get_users(self) -> list[dict[str, object]]:
+            return [{"id": 1, "name": "Leanne Graham"}]
+
+    class DummyProducer:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def build_autor_message(self, user: dict[str, object]) -> dict[str, object]:
+            return {"autor": {"id": 1}, "acordos": []}
+
+        def publish_message(self, payload: dict[str, object]) -> str:
+            return "msg-sqs-001"
+
+    class DummyConsumer:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def poll_once(self, max_messages: int = 10, wait_time_seconds: int = 2) -> int:
+            return 1
+
+    monkeypatch.setattr(acordo_controller, "ExternalAPIClient", DummyExtClient)
+    monkeypatch.setattr(acordo_controller, "ProducerService", DummyProducer)
+    monkeypatch.setattr(acordo_controller, "ConsumerService", DummyConsumer)
+
+    resp = api_client.post(
+        "/api/v1/carga/sincronizar?max_users=1",
+        headers={**auth_headers, "X-Correlation-ID": "sync-flow-777"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mensagens_publicadas_sqs"] == 1
+    assert body["mensagens_consumidas_rds"] == 1
+    assert body["message_ids"] == ["msg-sqs-001"]
+    assert body["correlation_id"] == "sync-flow-777"
+
+

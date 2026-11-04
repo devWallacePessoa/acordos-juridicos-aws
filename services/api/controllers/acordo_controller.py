@@ -17,6 +17,7 @@ from services.api.schemas.acordo_schema import (
     AcordoSchema,
     AutorComAcordosSchema,
     AutorResumoSchema,
+    CargaSyncResponse,
     DLQRedriveResponse,
     DocumentoSchema,
     EstatisticaGeralResponse,
@@ -26,6 +27,8 @@ from services.api.schemas.acordo_schema import (
 )
 from services.api.services.acordo_service import AcordoService
 from services.consumer.main import ConsumerService
+from services.producer.client import ExternalAPIClient
+from services.producer.sqs_publisher import ProducerService
 from shared.config.database import SessionLocal, get_db
 from shared.config.logging import get_correlation_id
 from shared.config.settings import Settings, get_settings
@@ -235,4 +238,48 @@ def reprocessar_dlq(
         reprocessed_count=resultado["reprocessed_count"],
         failed_count=resultado["failed_count"],
         correlation_id=get_correlation_id(),
+    )
+
+
+@v1_router.post(
+    "/carga/sincronizar",
+    response_model=CargaSyncResponse,
+    summary="Executar Fluxo Completo de Carga (API Pública -> SQS -> Consumer -> RDS)",
+    description=(
+        "Dispara o Producer (coleta na API pública JSONPlaceholder + De-Para + publicação no AWS SQS) "
+        "e em seguida o Consumer (leitura do SQS + gravação transacional Upsert no RDS), "
+        "enviando logs detalhados de cada etapa para o CloudWatch e Datadog."
+    ),
+)
+def sincronizar_carga_completa(
+    max_users: int = Query(
+        2,
+        ge=1,
+        le=10,
+        description="Quantidade de autores da API pública para processar no ciclo (1 a 10)",
+    ),
+) -> CargaSyncResponse:
+    cid = get_correlation_id()
+    with ExternalAPIClient() as ext_client:
+        producer = ProducerService(api_client=ext_client)
+        users = ext_client.get_users()[:max_users]
+        message_ids: List[str] = []
+        for user in users:
+            payload = producer.build_autor_message(user)
+            msg_id = producer.publish_message(payload)
+            message_ids.append(msg_id)
+
+    consumer = ConsumerService(session_factory=SessionLocal)
+    total_consumidas = 0
+    for _ in range(max_users):
+        consumidas = consumer.poll_once(max_messages=10, wait_time_seconds=2)
+        total_consumidas += consumidas
+        if total_consumidas >= len(message_ids) or consumidas == 0:
+            break
+
+    return CargaSyncResponse(
+        mensagens_publicadas_sqs=len(message_ids),
+        mensagens_consumidas_rds=total_consumidas,
+        message_ids=message_ids,
+        correlation_id=cid,
     )
