@@ -6,51 +6,57 @@ Solução completa ponta a ponta desenvolvida em **Python 3.12**, **FastAPI**, *
 
 ## 1. Parte 1 – Desenho da Arquitetura (AWS)
 
-A arquitetura adota o padrão **Event-Driven Microservices (Produtor → Fila SQS → Consumidor → Banco Relacional → API REST via API Gateway)**, separando claramente o **fluxo assíncrono de ingestão/carga** do **fluxo síncrono de consulta**.
+A arquitetura centraliza a computação no **Amazon ECS Fargate** (executando a **API FastAPI**, o **Producer** e o **Consumer**), integrando o **Amazon API Gateway** na entrada, a **API Pública Externa** na ingestão, o **Amazon SQS + DLQ** para mensageria assíncrona resiliente e o **Amazon RDS (PostgreSQL 16)** para persistência relacional.
 
 ```mermaid
 flowchart TB
-    subgraph Externa["1. Fonte Externa (Síncrono)"]
-        JP["API Pública JSONPlaceholder\n(/users, /albums, /photos)"]
+    %% Topo: API Pública Externa
+    EXT["🌐 API Pública Externa\n(JSONPlaceholder: /users, /albums, /photos)"]
+
+    %% Linha Central: Entrada (Esquerda) -> ECS Fargate (Centro) -> SQS + DLQ (Direita)
+    subgraph Entrada["1. Entrada Síncrona (HTTPS)"]
+        CLIENT["💻 Cliente / Insomnia\n(Bearer JWT / X-API-Key)"]
+        APIGW["🚪 Amazon API Gateway\n(HTTP API v2 - Rotas & CORS)"]
     end
 
-    subgraph Ingestao["2. Ingestão e Mensageria Assíncrona (AWS / LocalStack)"]
-        EB["Amazon EventBridge\n(Agendamento / Trigger)"]
-        PROD["Serviço Producer\n(HTTPX + Retry Exponencial + De-Para)"]
-        SQS["AWS SQS Main Queue\n(acordos-juridicos-prod-queue)"]
-        DLQ["AWS SQS Dead Letter Queue\n(acordos-juridicos-prod-dlq)\nmaxReceiveCount = 3"]
+    subgraph Computacao["2. Computação Central (AWS ECS)"]
+        ECS["🐳 Amazon ECS Fargate\nContainer Python 3.12\n• API FastAPI (Consulta)\n• Producer (Ingestão + De-Para)\n• Consumer (Worker SQS -> RDS)"]
     end
 
-    subgraph Processamento["3. Processamento e Persistência"]
-        CONS["Serviço Consumer\n(Worker SQS / Lambda Handler\nUpsert Transacional Idempotente)"]
-        RDS[("Amazon RDS PostgreSQL 16\nModelagem 3NF: autores, acordos, documentos")]
+    subgraph Mensageria["3. Mensageria Assíncrona (AWS SQS)"]
+        SQS["📩 Amazon SQS (Fila Principal)\nacordos-juridicos-prod-queue"]
+        DLQ["⚠️ Amazon SQS (Dead Letter Queue)\nacordos-juridicos-prod-dlq\n(Redrive: maxReceiveCount = 3)"]
     end
 
-    subgraph Exposicao["4. Exposição Síncrona (API de Consulta)"]
-        CLIENT["Clientes / Sistemas Jurídicos / Insomnia"]
-        APIGW["Amazon API Gateway HTTP v2\n(TLS / Rotas / Throttling / CORS)"]
-        ECS["Amazon ECS Fargate\n(FastAPI + Uvicorn + JWT / X-API-Key)"]
+    %% Base: Banco de Dados Relacional
+    subgraph Banco["4. Persistência Relacional (3NF)"]
+        RDS[("🐘 Amazon RDS PostgreSQL 16\nTabelas: autores, acordos, documentos")]
     end
 
+    %% Governança, Observabilidade e CI/CD
     subgraph Governanca["5. Observabilidade, Segredos e CI/CD"]
-        CW_DD["AWS CloudWatch Logs & Datadog\n(Logs JSON, Correlation-ID, APM/Métricas)"]
-        SM["AWS Secrets Manager & IAM Roles\n(Credenciais RDS, JWT Secret, API Keys)"]
-        CICD["GitHub Actions + Terraform (S3 State)\n(Ruff, Pytest, ECR Push, Deploy ECS/APIGW)"]
+        CW_DD["📊 CloudWatch Logs & Datadog\n(Logs JSON, Correlation-ID, Métricas RDS/SQS/CPU)"]
+        SM["🔐 AWS Secrets Manager & IAM\n(Credenciais, JWT Secret, Permissões SQS)"]
+        CICD["🚀 GitHub Actions + Terraform (S3) + ECR\n(Lint, Pytest, Build Imagem e Deploy Automático)"]
     end
 
-    EB -->|"Dispara carga"| PROD
-    PROD -->|"1. HTTP GET Síncrono\n(Retry + Backoff)"| JP
-    PROD -->|"2. Publica Evento Canônico\n(Assíncrono + CorrelationId)"| SQS
-    SQS -.->|"Falha após 3 tentativas\n(Redrive Policy)"| DLQ
-    SQS -->|"3. Long Polling Assíncrono\n(Batch até 10 msgs)"| CONS
-    DLQ -.->|"Reprocessamento sob demanda\n(POST /api/v1/dlq/reprocessar)"| CONS
-    CONS -->|"4. Transação ACID\n(session.merge Upsert)"| RDS
-    CLIENT -->|"5. HTTPS Síncrono\n(Bearer JWT / X-API-Key)"| APIGW
-    APIGW -->|"6. HTTP Proxy Síncrono"| ECS
-    ECS -->|"7. Consulta SQL Otimizada\n(selectinload)"| RDS
-    PROD & CONS & ECS -.->|"Logs JSON + Métricas"| CW_DD
-    SM -.->|"Injeta Segredos em Runtime"| ECS & CONS
-    CICD -.->|"Provisiona e Atualiza"| APIGW & ECS & RDS & SQS
+    %% Ligações Síncronas (Setas Contínuas)
+    CLIENT -->|"1. Requisição HTTPS"| APIGW
+    APIGW -->|"2. Proxy HTTP (Porta 8000)"| ECS
+    ECS -->|"6. Upsert ACID / SELECT (Porta 5432)"| RDS
+
+    %% Ligações de Carga e Mensageria (Setas Tracejadas como no seu desenho)
+    ECS -.->|"3a. Producer: GET Dados"| EXT
+    EXT -.->|"3b. JSON (Users/Albums/Photos)"| ECS
+    ECS -.->|"4. Producer: SendMessage"| SQS
+    SQS -.->|"5. Consumer: ReceiveMessage"| ECS
+    SQS -.->|"Falha após 3 tentativas"| DLQ
+    DLQ -.->|"Reprocessamento (/dlq/reprocessar)"| ECS
+
+    %% Ligações de Governança
+    ECS -.->|"Envia Logs e Métricas"| CW_DD
+    SM -.->|"Injeta Variáveis e Roles"| ECS
+    CICD -.->|"Provisiona Infra e Atualiza Imagem"| ECS & APIGW & SQS & RDS
 ```
 
 ### 1.1. Integrações Síncronas vs. Assíncronas
