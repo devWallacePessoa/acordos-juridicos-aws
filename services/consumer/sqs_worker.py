@@ -4,10 +4,10 @@ import json
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-import boto3
 from sqlalchemy.orm import Session
 
 from services.consumer.rds_persistence import persist_autor_payload
+from shared.config.aws_clients import build_sqs_client
 from shared.config.database import SessionLocal, init_db
 from shared.config.logging import get_correlation_id, get_logger, set_correlation_id
 from shared.config.settings import get_settings
@@ -27,15 +27,7 @@ class ConsumerService:
         self.settings = get_settings()
         self.session_factory = session_factory
         self.sqs_client = (
-            sqs_client
-            if sqs_client is not None
-            else boto3.client(
-                "sqs",
-                region_name=self.settings.AWS_REGION,
-                endpoint_url=self.settings.AWS_ENDPOINT_URL,
-                aws_access_key_id=self.settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=self.settings.AWS_SECRET_ACCESS_KEY,
-            )
+            sqs_client if sqs_client is not None else build_sqs_client(self.settings)
         )
         self.queue_url = queue_url or self._resolve_queue_url()
 
