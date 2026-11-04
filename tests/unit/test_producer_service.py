@@ -117,21 +117,3 @@ def test_producer_service_run_publishes_to_sqs(sample_raw_api_data: Dict[str, An
     assert len(sent_body["acordos"][0]["documentos"]) == 2
 
 
-def test_producer_lambda_handler(
-    sample_raw_api_data: Dict[str, Any],
-    monkeypatch: Any,
-) -> None:
-    """Valida a execução do lambda_handler do Producer."""
-    from services.producer import main as producer_main
-
-    mock_service = MagicMock()
-    mock_service.run.return_value = ["msg-lambda-1"]
-    monkeypatch.setattr(producer_main, "ProducerService", lambda api_client=None: mock_service)
-
-    response = producer_main.lambda_handler({"max_users": 1})
-    assert response == {
-        "statusCode": 200,
-        "publishedCount": 1,
-        "messageIds": ["msg-lambda-1"],
-    }
-

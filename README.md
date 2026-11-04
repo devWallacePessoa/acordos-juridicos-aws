@@ -75,17 +75,17 @@ Foi escolhido o **PostgreSQL 16 (Amazon RDS)** em vez de um banco NoSQL pelos se
 
 ### 1.3. Do Ambiente Local (LocalStack + Docker) para Produção na AWS
 - **No ambiente local (`docker-compose.yml`)**: O container **LocalStack** emula a API do AWS SQS em `http://localstack:4566`, e o serviço `sqs-init` cria automaticamente a fila principal (`acordos-juridicos-queue`) e a DLQ (`acordos-juridicos-dlq`) com `RedrivePolicy`.
-- **Em produção na AWS (`us-east-2`)**: Nenhuma linha de código muda. Basta omitir/deixar vazia a variável `AWS_ENDPOINT_URL` e utilizar as IAM Roles da Task ECS / Lambda. O SDK `boto3` passa a se conectar nativamente ao **Amazon SQS** gerenciado, e a string de conexão aponta para a instância **Amazon RDS PostgreSQL**.
+- **Em produção na AWS (`us-east-2`)**: Nenhuma linha de código muda. Basta omitir/deixar vazia a variável `AWS_ENDPOINT_URL` e utilizar as IAM Roles da Task no **Amazon ECS Fargate**. O SDK `boto3` passa a se conectar nativamente ao **Amazon SQS** gerenciado, e a string de conexão aponta para a instância **Amazon RDS PostgreSQL**.
 
 ### 1.4. Diferencial: Comparativo de Computação na AWS (Lambda vs. ECS Fargate vs. EKS)
 
-| Critério | AWS Lambda | Amazon ECS Fargate *(Escolhido para a API)* | Amazon EKS (Kubernetes) |
+| Critério | AWS Lambda | Amazon ECS Fargate *(Escolhido no Projeto)* | Amazon EKS (Kubernetes) |
 | :--- | :--- | :--- | :--- |
-| **Custo** | Cobrança por invocação e ms de execução (excelente para cargas esporádicas como Producer/Consumer). | Cobrança por vCPU/Memória provisionada por segundo (`0.25 vCPU / 512 MB` ≈ baixo custo previsível; pode zerar `desiredCount=0` fora de uso). | Alto custo fixo inicial ($73+/mês apenas pelo Control Plane por cluster, mais nós EC2/Fargate). |
-| **Escalabilidade** | Escala de 0 a milhares de execuções simultâneas instantaneamente; sujeito a *Cold Start* e necessidade de *RDS Proxy* para não esgotar conexões PostgreSQL. | Escala horizontal automática de containers sem *Cold Start* por requisição; mantém *Connection Pool* SQLAlchemy ativo e estável com o RDS. | Altíssima escalabilidade (HPA/Karpenter), ideal apenas para dezenas/centenas de microsserviços complexos. |
-| **Operação** | Zero gerenciamento de servidor; limite máximo de execução de 15 minutos por invocação. | Serverless para containers: sem gerenciamento de máquinas EC2, integração nativa com ALB/API Gateway, CloudWatch e ECR. | Alta complexidade operacional (atualização de versão do K8s, CNI, Ingress Controllers, RBAC). |
+| **Custo** | Cobrança por invocação e ms de execução; porém, com PostgreSQL sob pico, exige contratar *AWS RDS Proxy* (~US$ 15/mês fixos). | Cobrança por vCPU/Memória provisionada por segundo (`0.25 vCPU / 512 MB` ≈ baixo custo previsível; pode zerar `desiredCount=0` fora de uso). | Alto custo fixo inicial ($73+/mês apenas pelo Control Plane por cluster, mais nós EC2/Fargate). |
+| **Escalabilidade** | Escala de 0 a milhares de execuções simultâneas instantaneamente; sujeito a *Cold Start* e esgotamento de conexões do PostgreSQL. | Escala horizontal automática de containers sem *Cold Start*; mantém *Connection Pool* SQLAlchemy ativo e estável com o RDS. | Altíssima escalabilidade (HPA/Karpenter), ideal apenas para dezenas/centenas de microsserviços complexos. |
+| **Operação** | Zero gerenciamento de servidor; limite máximo de execução de 15 minutos por invocação. | Serverless para containers: usa a exata mesma imagem `Dockerfile` do Docker Compose local, integrando com API Gateway, ECR, CloudWatch e Datadog. | Alta complexidade operacional (atualização de versão do K8s, CNI, Ingress Controllers, RBAC). |
 
-> **Conclusão Arquitetural**: O **ECS Fargate** oferece o melhor equilíbrio custo-benefício e operacional para a **API FastAPI** (sem *cold start*, mantendo pool de conexões com o RDS e telemetria contínua com o Datadog), enquanto o código do **Producer** e do **Consumer** foi escrito de forma híbrida (suportando execução tanto como Worker em Container quanto via `lambda_handler` no **AWS Lambda**).
+> **Conclusão Arquitetural**: O **Amazon ECS Fargate** foi escolhido para rodar a aplicação (sem *cold start*, mantendo pool de conexões ativo com o RDS PostgreSQL sem custo extra de RDS Proxy, telemetria contínua com o Datadog e 100% de paridade com os containers do Docker Compose local).
 
 ---
 
@@ -165,6 +165,7 @@ curl -X GET "http://localhost:8000/api/v1/usuarios/1/acordos?doc_page=1&doc_size
 | `GET` | `/api/v1/acordos/{acordo_id}/documentos` | Lista os documentos de um acordo específico |
 | `GET` | `/api/v1/documentos/{documento_id}` | Consulta um documento específico pelo ID |
 | `GET` | `/api/v1/estatisticas` | Indicadores consolidados da base de acordos |
+| `POST` | `/api/v1/carga/sincronizar` | Executa o fluxo completo sob demanda (API Pública $\rightarrow$ SQS $\rightarrow$ Consumer $\rightarrow$ RDS) |
 | `POST` | `/api/v1/dlq/reprocessar` | **Diferencial**: Reprocessa mensagens retidas na fila DLQ de forma idempotente |
 
 ---
@@ -203,7 +204,7 @@ Em conformidade com a **LGPD (Lei Geral de Proteção de Dados - Lei nº 13.709/
    - **Minimização e Mascaramento Sob Demanda**: A API expõe apenas os campos estritamente necessários ao domínio jurídico e oferece o parâmetro `mascarar_dados=true` (`GET /api/v1/usuarios/{id}/acordos?mascarar_dados=true`), que retorna e-mail (`S***@april.biz`), telefone (`***-6442`) e logradouro (`*** - Gwenborough CEP 92998-3874`) anonimizados para perfis de consulta restritos.
 3. **No Banco de Dados (`Amazon RDS PostgreSQL`)**:
    - **Criptografia em Repouso e em Trânsito**: O RDS PostgreSQL opera com `storage_encrypted = true` (AWS KMS) para dados em disco e conexões exigindo SSL/TLS.
-   - **Isolamento de Rede e Gestão de Segredos**: Em produção, o banco é protegido por *Security Groups* restritivos (aceitando tráfego na porta `5432` exclusivamente das Tasks do ECS/Consumer), credenciais gerenciadas via **AWS Secrets Manager** (sem senhas *hardcoded* no código) e controle de acesso baseado em menor privilégio (IAM Roles).
+   - **Isolamento de Rede e Gestão de Segredos**: Em produção, o banco é protegido por *Security Groups* restritivos (`rds.tf`), variáveis sensíveis injetadas via **GitHub Encrypted Secrets** na Task Definition do ECS (sem senhas *hardcoded* no código) e controle de acesso baseado em menor privilégio via **AWS IAM Roles** (`network_iam.tf`).
 
 ---
 
