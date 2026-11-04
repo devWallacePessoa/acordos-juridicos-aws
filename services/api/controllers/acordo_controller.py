@@ -253,7 +253,7 @@ def reprocessar_dlq(
 )
 def sincronizar_carga_completa(
     max_users: int = Query(
-        2,
+        10,
         ge=1,
         le=10,
         description="Quantidade de autores da API pública para processar no ciclo (1 a 10)",
@@ -271,10 +271,12 @@ def sincronizar_carga_completa(
 
     consumer = ConsumerService(session_factory=SessionLocal)
     total_consumidas = 0
-    for _ in range(max_users):
+    # Polling resiliente: repete até consumir todas as mensagens publicadas ou esgotar tentativas
+    max_tentativas = max(max_users * 2, 5)
+    for _ in range(max_tentativas):
         consumidas = consumer.poll_once(max_messages=10, wait_time_seconds=2)
         total_consumidas += consumidas
-        if total_consumidas >= len(message_ids) or consumidas == 0:
+        if total_consumidas >= len(message_ids):
             break
 
     return CargaSyncResponse(

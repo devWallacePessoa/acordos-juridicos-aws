@@ -73,14 +73,17 @@ class ProducerService:
             },
         )
         message_id = str(response.get("MessageId", ""))
+        total_acordos = len(payload.get("acordos", []))
+        nome_autor = payload.get("autor", {}).get("nome", "")
         logger.info(
-            "Mensagem publicada com sucesso no SQS",
+            f"Mensagem do autor {autor_id} ('{nome_autor}') publicada com sucesso no SQS ({total_acordos} acordos)",
             extra={
                 "extra_data": {
                     "autor_id": autor_id,
+                    "nome_autor": nome_autor,
                     "message_id": message_id,
                     "correlation_id": correlation_id,
-                    "total_acordos": len(payload.get("acordos", [])),
+                    "total_acordos": total_acordos,
                 }
             },
         )
