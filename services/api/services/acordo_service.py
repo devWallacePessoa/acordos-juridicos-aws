@@ -3,7 +3,7 @@
 import math
 from typing import Optional
 
-from services.api.exceptions import ResourceNotFoundError
+from services.api.exceptions import DomainError, ResourceNotFoundError
 from services.api.repositories.acordo_repository import AcordoRepository
 from services.api.schemas.acordo_schema import (
     AcordoDetalheResponse,
@@ -15,7 +15,9 @@ from services.api.schemas.acordo_schema import (
     EmpresaSchema,
     EstatisticaGeralResponse,
     PaginatedResponse,
+    ResumoAcordosSchema,
 )
+from shared.config.logging import mask_address, mask_email, mask_phone
 from shared.models.entities import AcordoORM, AutorORM, DocumentoORM
 
 
@@ -24,6 +26,16 @@ class AcordoService:
 
     def __init__(self, repository: AcordoRepository) -> None:
         self.repository = repository
+
+    @staticmethod
+    def _validate_positive_id(identifier: int, field_name: str = "id") -> None:
+        if identifier <= 0:
+            raise DomainError(
+                message=f"Parâmetro '{field_name}' inválido ({identifier}). Deve ser um inteiro positivo maior que zero.",
+                status_code=400,
+                error_code="INVALID_ID",
+                details={"field": field_name, "value": identifier},
+            )
 
     @staticmethod
     def _to_documento_schema(doc: DocumentoORM) -> DocumentoSchema:
@@ -35,26 +47,39 @@ class AcordoService:
         )
 
     @classmethod
-    def _to_acordo_schema(cls, acordo: AcordoORM, include_docs: bool = True) -> AcordoSchema:
-        docs = (
-            [cls._to_documento_schema(d) for d in acordo.documentos]
-            if include_docs and acordo.documentos
-            else []
-        )
+    def _to_acordo_schema(
+        cls,
+        acordo: AcordoORM,
+        include_docs: bool = True,
+        doc_page: Optional[int] = None,
+        doc_size: Optional[int] = None,
+    ) -> AcordoSchema:
+        raw_docs = list(acordo.documentos) if acordo.documentos else []
+        total_docs = len(raw_docs)
+        if not include_docs:
+            docs_slice: list[DocumentoORM] = []
+        elif doc_page is not None and doc_size is not None and doc_page >= 1 and doc_size >= 1:
+            start = (doc_page - 1) * doc_size
+            docs_slice = raw_docs[start : start + doc_size]
+        else:
+            docs_slice = raw_docs
+
+        docs = [cls._to_documento_schema(d) for d in docs_slice]
         return AcordoSchema(
             id=acordo.id,
             titulo=acordo.titulo,
+            quantidadeDocumentos=total_docs,
             documentos=docs,
         )
 
     @staticmethod
-    def _to_autor_schema(autor: AutorORM) -> AutorSchema:
+    def _to_autor_schema(autor: AutorORM, mascarar_dados: bool = False) -> AutorSchema:
         return AutorSchema(
             id=autor.id,
             nome=autor.nome,
-            email=autor.email,
-            telefone=autor.telefone,
-            endereco=autor.endereco,
+            email=mask_email(autor.email) if mascarar_dados else autor.email,
+            telefone=mask_phone(autor.telefone) if mascarar_dados else autor.telefone,
+            endereco=mask_address(autor.endereco) if mascarar_dados else autor.endereco,
             empresa=EmpresaSchema(
                 nome=autor.empresa_nome,
                 segmento=autor.empresa_segmento,
@@ -67,6 +92,7 @@ class AcordoService:
         size: int = 10,
         nome: Optional[str] = None,
         segmento: Optional[str] = None,
+        mascarar_dados: bool = False,
     ) -> PaginatedResponse[AutorResumoSchema]:
         """Retorna lista paginada de autores com o total de acordos de cada autor."""
         autores, total = self.repository.list_autores(
@@ -76,9 +102,9 @@ class AcordoService:
             AutorResumoSchema(
                 id=a.id,
                 nome=a.nome,
-                email=a.email,
-                telefone=a.telefone,
-                endereco=a.endereco,
+                email=mask_email(a.email) if mascarar_dados else a.email,
+                telefone=mask_phone(a.telefone) if mascarar_dados else a.telefone,
+                endereco=mask_address(a.endereco) if mascarar_dados else a.endereco,
                 empresa=EmpresaSchema(
                     nome=a.empresa_nome,
                     segmento=a.empresa_segmento,
@@ -100,18 +126,32 @@ class AcordoService:
         self,
         autor_id: int,
         incluir_documentos: bool = True,
+        doc_page: Optional[int] = None,
+        doc_size: Optional[int] = None,
+        mascarar_dados: bool = False,
     ) -> AutorComAcordosSchema:
-        """Retorna a estrutura completa Autor (1) -> (N) Acordos (1) -> (N) Documentos."""
+        """Retorna a estrutura completa Autor (1) -> Resumo -> (N) Acordos (1) -> (N) Documentos."""
+        self._validate_positive_id(autor_id, "autor_id")
         autor = self.repository.get_autor_with_acordos_and_documentos(autor_id)
         if not autor:
             raise ResourceNotFoundError("Autor", autor_id)
 
         acordos = [
-            self._to_acordo_schema(ac, include_docs=incluir_documentos)
+            self._to_acordo_schema(
+                ac,
+                include_docs=incluir_documentos,
+                doc_page=doc_page,
+                doc_size=doc_size,
+            )
             for ac in autor.acordos
         ]
+        total_docs = sum(ac.quantidadeDocumentos for ac in acordos)
         return AutorComAcordosSchema(
-            autor=self._to_autor_schema(autor),
+            autor=self._to_autor_schema(autor, mascarar_dados=mascarar_dados),
+            resumo=ResumoAcordosSchema(
+                quantidadeAcordos=len(acordos),
+                quantidadeDocumentos=total_docs,
+            ),
             acordos=acordos,
         )
 
@@ -124,6 +164,8 @@ class AcordoService:
         incluir_documentos: bool = True,
     ) -> PaginatedResponse[AcordoSchema]:
         """Retorna lista paginada de acordos com filtro opcional por autor ou título."""
+        if autor_id is not None:
+            self._validate_positive_id(autor_id, "autor_id")
         acordos, total = self.repository.list_acordos(
             page=page, size=size, autor_id=autor_id, titulo=titulo
         )
@@ -140,19 +182,25 @@ class AcordoService:
             items=items,
         )
 
-    def obter_acordo_por_id(self, acordo_id: int) -> AcordoDetalheResponse:
+    def obter_acordo_por_id(
+        self,
+        acordo_id: int,
+        mascarar_dados: bool = False,
+    ) -> AcordoDetalheResponse:
         """Retorna detalhes de um acordo específico, seus documentos e os dados do autor."""
+        self._validate_positive_id(acordo_id, "acordo_id")
         acordo = self.repository.get_acordo_by_id(acordo_id)
         if not acordo:
             raise ResourceNotFoundError("Acordo", acordo_id)
 
         return AcordoDetalheResponse(
             acordo=self._to_acordo_schema(acordo, include_docs=True),
-            autor=self._to_autor_schema(acordo.autor),
+            autor=self._to_autor_schema(acordo.autor, mascarar_dados=mascarar_dados),
         )
 
     def obter_documento_por_id(self, documento_id: int) -> DocumentoSchema:
         """Retorna os dados de um documento específico pelo seu ID."""
+        self._validate_positive_id(documento_id, "documento_id")
         doc = self.repository.get_documento_by_id(documento_id)
         if not doc:
             raise ResourceNotFoundError("Documento", documento_id)

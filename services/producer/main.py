@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 import boto3
 
 from services.producer.client import ExternalAPIClient
-from shared.config.logging import get_logger
+from shared.config.logging import get_correlation_id, get_logger, set_correlation_id
 from shared.config.settings import get_settings
 
 logger = get_logger(__name__)
@@ -106,8 +106,9 @@ class ProducerService:
         return map_user_to_autor_payload(user_detail, acordos_mapeados)
 
     def publish_message(self, payload: Dict[str, Any]) -> str:
-        """Publica o payload JSON de um autor e seus acordos na fila AWS SQS."""
+        """Publica o payload JSON de um autor e seus acordos na fila AWS SQS com CorrelationId."""
         autor_id = payload["autor"]["id"]
+        correlation_id = get_correlation_id()
         response = self.sqs_client.send_message(
             QueueUrl=self.queue_url,
             MessageBody=json.dumps(payload, ensure_ascii=False),
@@ -120,6 +121,10 @@ class ProducerService:
                     "DataType": "String",
                     "StringValue": "ACORDO_SYNC",
                 },
+                "CorrelationId": {
+                    "DataType": "String",
+                    "StringValue": correlation_id,
+                },
             },
         )
         message_id = str(response.get("MessageId", ""))
@@ -129,6 +134,7 @@ class ProducerService:
                 "extra_data": {
                     "autor_id": autor_id,
                     "message_id": message_id,
+                    "correlation_id": correlation_id,
                     "total_acordos": len(payload.get("acordos", [])),
                 }
             },
@@ -137,6 +143,7 @@ class ProducerService:
 
     def run(self, max_users: Optional[int] = None) -> List[str]:
         """Executa o fluxo completo do produtor para todos os autores (ou limite especificado)."""
+        set_correlation_id()
         limit = max_users if max_users is not None else self.settings.PRODUCER_MAX_USERS
         users = self.api_client.get_users()
         if limit and limit > 0:

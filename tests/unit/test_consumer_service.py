@@ -164,3 +164,42 @@ def test_consumer_lambda_handler_success_and_partial_batch_failure(
     result = consumer_main.lambda_handler(event)
     assert result == {"batchItemFailures": [{"itemIdentifier": "msg-fail"}]}
 
+
+def test_consumer_reprocess_dlq_success_and_failure(
+    db_session_factory: Callable[[], Session],
+) -> None:
+    """Valida o reprocessamento sob demanda da fila Dead Letter Queue (DLQ)."""
+    mock_sqs = MagicMock()
+    mock_sqs.get_queue_url.return_value = {
+        "QueueUrl": "http://localhost:4566/000000000000/acordos-juridicos-dlq"
+    }
+    mock_sqs.receive_message.return_value = {
+        "Messages": [
+            {
+                "MessageId": "dlq-ok",
+                "ReceiptHandle": "rh-dlq-ok",
+                "Body": json.dumps(_build_sample_sqs_payload()),
+                "MessageAttributes": {
+                    "CorrelationId": {"DataType": "String", "StringValue": "cid-dlq-1"}
+                },
+            },
+            {
+                "MessageId": "dlq-bad",
+                "ReceiptHandle": "rh-dlq-bad",
+                "Body": json.dumps({"invalido": True}),
+            },
+        ]
+    }
+    consumer = ConsumerService(
+        session_factory=db_session_factory,
+        sqs_client=mock_sqs,
+        queue_url="http://localhost:4566/000000000000/acordos-juridicos-queue",
+    )
+    summary = consumer.reprocess_dlq(max_messages=5)
+    assert summary == {"reprocessed_count": 1, "failed_count": 1}
+    mock_sqs.delete_message.assert_called_once_with(
+        QueueUrl=consumer._resolve_dlq_url(),
+        ReceiptHandle="rh-dlq-ok",
+    )
+
+

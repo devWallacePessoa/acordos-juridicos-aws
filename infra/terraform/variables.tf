@@ -45,7 +45,7 @@ variable "jwt_secret_key" {
 variable "api_backend_url" {
   description = "URL HTTP publica do container ECS Fargate na porta 8000 para integracao com o API Gateway"
   type        = string
-  default     = "http://3.133.91.249:8000/{proxy}"
+  default     = "http://3.133.91.249:8000"
 }
 
 variable "dd_api_key" {
