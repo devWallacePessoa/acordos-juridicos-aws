@@ -284,7 +284,7 @@ jobs:
           aws apigatewayv2 update-integration \
             --api-id "$API_ID" \
             --integration-id "$INTEGRATION_ID" \
-            --integration-uri "http://${PUBLIC_IP}:8000/{proxy}" \
+            --integration-uri "http://${PUBLIC_IP}:8000" \
             --region "$AWS_REGION" > /dev/null
 
           echo "Deploy concluido! API Gateway https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com apontando para http://${PUBLIC_IP}:8000"
