@@ -3,6 +3,7 @@
 from functools import lru_cache
 from typing import Optional
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +56,14 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
     CONSUMER_POLL_INTERVAL_SECONDS: int = 2
     CONSUMER_MAX_MESSAGES: int = 10
+
+    @field_validator("AWS_ENDPOINT_URL", "SQS_QUEUE_URL", "SQS_DLQ_URL", "DATABASE_URL", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, value: Optional[str]) -> Optional[str]:
+        """Converte variável de ambiente vazia em None (ex.: AWS_ENDPOINT_URL vazio na AWS real)."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @property
     def sqlalchemy_database_url(self) -> str:

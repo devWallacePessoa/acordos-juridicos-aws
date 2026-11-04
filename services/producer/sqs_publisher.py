@@ -3,13 +3,12 @@
 import json
 from typing import Any, Dict, List, Optional
 
-import boto3
-
 from services.producer.client import ExternalAPIClient
 from services.producer.de_para_mapper import (
     map_album_to_acordo,
     map_user_to_autor_payload,
 )
+from shared.config.aws_clients import build_sqs_client
 from shared.config.logging import get_correlation_id, get_logger, set_correlation_id
 from shared.config.settings import get_settings
 
@@ -27,13 +26,7 @@ class ProducerService:
     ) -> None:
         self.settings = get_settings()
         self.api_client = api_client or ExternalAPIClient()
-        self.sqs_client = sqs_client or boto3.client(
-            "sqs",
-            region_name=self.settings.AWS_REGION,
-            endpoint_url=self.settings.AWS_ENDPOINT_URL,
-            aws_access_key_id=self.settings.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=self.settings.AWS_SECRET_ACCESS_KEY,
-        )
+        self.sqs_client = sqs_client or build_sqs_client(self.settings)
         self.queue_url = queue_url or self._resolve_queue_url()
 
     def _resolve_queue_url(self) -> str:
