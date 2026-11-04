@@ -48,6 +48,7 @@ locals {
     "GET /api/v1/documentos/{documento_id}",
     "GET /api/v1/estatisticas",
     "POST /api/v1/dlq/reprocessar",
+    "POST /api/v1/carga/sincronizar",
   ])
 }
 
