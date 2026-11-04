@@ -322,6 +322,29 @@ resource "aws_apigatewayv2_route" "proxy_route" {
   target    = "integrations/${aws_apigatewayv2_integration.api_proxy.id}"
 }
 
+locals {
+  explicit_api_routes = toset([
+    "GET /health",
+    "GET /docs",
+    "GET /openapi.json",
+    "POST /api/v1/auth/token",
+    "GET /api/v1/autores",
+    "GET /api/v1/autores/{autor_id}/acordos",
+    "GET /api/v1/acordos",
+    "GET /api/v1/acordos/{acordo_id}",
+    "GET /api/v1/acordos/{acordo_id}/documentos",
+    "GET /api/v1/documentos/{documento_id}",
+    "GET /api/v1/estatisticas",
+  ])
+}
+
+resource "aws_apigatewayv2_route" "explicit_routes" {
+  for_each  = local.explicit_api_routes
+  api_id    = aws_apigatewayv2_api.http_api.id
+  route_key = each.value
+  target    = "integrations/${aws_apigatewayv2_integration.api_proxy.id}"
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http_api.id
   name        = "$default"

@@ -143,6 +143,31 @@ jobs:
 
           terraform init -reconfigure
 
+          # Remove APIs duplicadas criadas acidentalmente antes da importacao do state, mantendo a principal (5c0bm1ew3d)
+          ALL_APIS=$(aws apigatewayv2 get-apis --region "$AWS_REGION" --query "Items[?Name=='acordos-juridicos-prod-http-api'].ApiId" --output text)
+          for CANDIDATE_API in $ALL_APIS; do
+            if [ "$CANDIDATE_API" != "5c0bm1ew3d" ] && [ -n "$CANDIDATE_API" ] && [ "$CANDIDATE_API" != "None" ]; then
+              echo "Removendo API Gateway duplicado: $CANDIDATE_API"
+              aws apigatewayv2 delete-api --api-id "$CANDIDATE_API" --region "$AWS_REGION" || true
+            fi
+          done
+
+          # Garante que o state aponte para a API principal 5c0bm1ew3d
+          CURRENT_API_STATE=$(terraform state show aws_apigatewayv2_api.http_api 2>/dev/null | grep 'id.*=' | head -n 1 | awk -F'"' '{print $2}' || true)
+          if [ -n "$CURRENT_API_STATE" ] && [ "$CURRENT_API_STATE" != "5c0bm1ew3d" ]; then
+            terraform state rm aws_apigatewayv2_route.proxy_route || true
+            terraform state rm aws_apigatewayv2_stage.default || true
+            terraform state rm aws_apigatewayv2_integration.api_proxy || true
+            terraform state rm aws_apigatewayv2_api.http_api || true
+            API_ID="5c0bm1ew3d"
+            INTEGRATION_ID=$(aws apigatewayv2 get-integrations --api-id "$API_ID" --region "$AWS_REGION" --query "Items[0].IntegrationId" --output text)
+            ROUTE_ID=$(aws apigatewayv2 get-routes --api-id "$API_ID" --region "$AWS_REGION" --query "Items[?RouteKey=='ANY /{proxy+}'].RouteId | [0]" --output text)
+            terraform import aws_apigatewayv2_api.http_api "$API_ID" || true
+            terraform import aws_apigatewayv2_integration.api_proxy "${API_ID}/${INTEGRATION_ID}" || true
+            terraform import aws_apigatewayv2_route.proxy_route "${API_ID}/${ROUTE_ID}" || true
+            terraform import aws_apigatewayv2_stage.default "${API_ID}/\$default" || true
+          fi
+
           # Importa recursos existentes caso ainda nao constem no tfstate remoto no S3
           if ! terraform state show aws_ecr_repository.app_repo >/dev/null 2>&1; then
             echo "Sincronizando recursos existentes da AWS para o estado remoto no S3..."
@@ -173,6 +198,17 @@ jobs:
             terraform import aws_apigatewayv2_integration.api_proxy "${API_ID}/${INTEGRATION_ID}" || true
             terraform import aws_apigatewayv2_route.proxy_route "${API_ID}/${ROUTE_ID}" || true
             terraform import aws_apigatewayv2_stage.default "${API_ID}/\$default" || true
+          fi
+
+          # Se o banco RDS estiver pausado (stopped) para economia de custos, religa automaticamente antes do deploy
+          RDS_STATUS=$(aws rds describe-db-instances --db-instance-identifier acordos-juridicos-prod-db --region "$AWS_REGION" --query "DBInstances[0].DBInstanceStatus" --output text 2>/dev/null || true)
+          if [ "$RDS_STATUS" = "stopped" ]; then
+            echo "Banco RDS estava pausado (stopped). Iniciando instancia acordos-juridicos-prod-db..."
+            aws rds start-db-instance --db-instance-identifier acordos-juridicos-prod-db --region "$AWS_REGION" > /dev/null
+            aws rds wait db-instance-available --db-instance-identifier acordos-juridicos-prod-db --region "$AWS_REGION"
+          elif [ "$RDS_STATUS" = "stopping" ] || [ "$RDS_STATUS" = "starting" ]; then
+            echo "Aguardando transicao de estado do RDS ($RDS_STATUS -> available)..."
+            aws rds wait db-instance-available --db-instance-identifier acordos-juridicos-prod-db --region "$AWS_REGION" || true
           fi
 
           terraform apply -auto-approve
