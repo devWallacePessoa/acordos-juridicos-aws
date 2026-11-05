@@ -41,16 +41,34 @@ payload = {
     ],
 }
 
+region = os.getenv("AWS_REGION", "us-east-1")
+endpoint = "http://localhost:4566"
+queue_name = os.getenv("SQS_DLQ_NAME", "acordos-juridicos-dlq")
+
 sqs = boto3.client(
     "sqs",
-    region_name="us-east-2",
-    endpoint_url=os.getenv("AWS_ENDPOINT_URL", "http://localhost:4566"),
+    region_name=region,
+    endpoint_url=endpoint,
     aws_access_key_id="test",
     aws_secret_access_key="test",
 )
 
 try:
-    dlq_url = sqs.get_queue_url(QueueName="acordos-juridicos-prod-dlq")["QueueUrl"]
+    try:
+        dlq_url = sqs.get_queue_url(QueueName=queue_name)["QueueUrl"]
+    except sqs.exceptions.QueueDoesNotExist:
+        # Cria a DLQ caso o container do LocalStack tenha sido reiniciado
+        print(f"[*] Fila '{queue_name}' nao encontrada no LocalStack. Criando automaticamente...")
+        resp_create = sqs.create_queue(QueueName=queue_name)
+        dlq_url = resp_create["QueueUrl"]
+    except Exception as ex:
+        if "NonExistentQueue" in str(ex):
+            print(f"[*] Fila '{queue_name}' nao encontrada no LocalStack. Criando automaticamente...")
+            resp_create = sqs.create_queue(QueueName=queue_name)
+            dlq_url = resp_create["QueueUrl"]
+        else:
+            raise
+
     resp = sqs.send_message(
         QueueUrl=dlq_url,
         MessageBody=json.dumps(payload),
