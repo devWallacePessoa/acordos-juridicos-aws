@@ -16,7 +16,7 @@ flowchart TB
     %% Linha Central: Entrada (Esquerda) -> ECS Fargate (Centro) -> SQS + DLQ (Direita)
     subgraph Entrada["1. Entrada Síncrona (HTTPS)"]
         CLIENT["💻 Cliente / Insomnia\n(Bearer JWT / X-API-Key)"]
-        APIGW["🚪 Amazon API Gateway\n(HTTP API v2 - Rotas & CORS)"]
+        APIGW["🚪 Amazon API Gateway\n(HTTP API v2 - Rotas & CORS)"] 
     end
 
     subgraph Computacao["2. Computação Central (AWS ECS)"]
