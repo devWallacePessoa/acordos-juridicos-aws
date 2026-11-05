@@ -1,0 +1,168 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_date": "2026-11-05T01:50:00.000Z",
+  "__export_source": "insomnia.desktop.app:v2023.5.8",
+  "resources": [
+    {
+      "_id": "wrk_acordos_juridicos",
+      "_type": "workspace",
+      "name": "Case Acordos Jurídicos (AWS & Local)",
+      "description": "Collection completa para demonstração do Case Técnico (LocalStack e AWS ECS/RDS/SQS)"
+    },
+    {
+      "_id": "fld_aws",
+      "_type": "request_group",
+      "parentId": "wrk_acordos_juridicos",
+      "name": "1. AWS Cloud (API Gateway)"
+    },
+    {
+      "_id": "fld_local",
+      "_type": "request_group",
+      "parentId": "wrk_acordos_juridicos",
+      "name": "2. Local (Docker Compose)"
+    },
+    {
+      "_id": "req_aws_health",
+      "_type": "request",
+      "parentId": "fld_aws",
+      "name": "Health Check (AWS)",
+      "method": "GET",
+      "url": "https://5c0bm1ew3d.execute-api.us-east-2.amazonaws.com/health"
+    },
+    {
+      "_id": "req_aws_token",
+      "_type": "request",
+      "parentId": "fld_aws",
+      "name": "1. Obter Token JWT (AWS)",
+      "method": "POST",
+      "url": "https://5c0bm1ew3d.execute-api.us-east-2.amazonaws.com/api/v1/auth/token",
+      "headers": [{ "name": "Content-Type", "value": "application/json" }],
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"username\": \"admin\",\n  \"password\": \"admin123\"\n}"
+      }
+    },
+    {
+      "_id": "req_aws_sync",
+      "_type": "request",
+      "parentId": "fld_aws",
+      "name": "2. Carga Completa SQS -> RDS (AWS)",
+      "method": "POST",
+      "url": "https://5c0bm1ew3d.execute-api.us-east-2.amazonaws.com/api/v1/carga/sincronizar?max_users=10",
+      "headers": [
+        { "name": "Authorization", "value": "Bearer {% response 'body', 'req_aws_token', 'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}" },
+        { "name": "X-Correlation-ID", "value": "demo-carga-aws-001" }
+      ]
+    },
+    {
+      "_id": "req_aws_get_autor",
+      "_type": "request",
+      "parentId": "fld_aws",
+      "name": "3. Consultar Autor 1 com Acordos e Resumo (AWS)",
+      "method": "GET",
+      "url": "https://5c0bm1ew3d.execute-api.us-east-2.amazonaws.com/api/v1/usuarios/1/acordos",
+      "headers": [
+        { "name": "Authorization", "value": "Bearer {% response 'body', 'req_aws_token', 'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}" }
+      ]
+    },
+    {
+      "_id": "req_aws_stats",
+      "_type": "request",
+      "parentId": "fld_aws",
+      "name": "4. Estatísticas Gerais (AWS)",
+      "method": "GET",
+      "url": "https://5c0bm1ew3d.execute-api.us-east-2.amazonaws.com/api/v1/estatisticas",
+      "headers": [
+        { "name": "Authorization", "value": "Bearer {% response 'body', 'req_aws_token', 'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}" }
+      ]
+    },
+    {
+      "_id": "req_aws_lgpd",
+      "_type": "request",
+      "parentId": "fld_aws",
+      "name": "5. Diferencial: Mascaramento LGPD (AWS)",
+      "method": "GET",
+      "url": "https://5c0bm1ew3d.execute-api.us-east-2.amazonaws.com/api/v1/usuarios/1/acordos?mascarar_dados=true",
+      "headers": [
+        { "name": "Authorization", "value": "Bearer {% response 'body', 'req_aws_token', 'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}" }
+      ]
+    },
+    {
+      "_id": "req_aws_id_invalido",
+      "_type": "request",
+      "parentId": "fld_aws",
+      "name": "6. Teste Erro HTTP 400 ID Inválido (AWS)",
+      "method": "GET",
+      "url": "https://5c0bm1ew3d.execute-api.us-east-2.amazonaws.com/api/v1/usuarios/0/acordos",
+      "headers": [
+        { "name": "Authorization", "value": "Bearer {% response 'body', 'req_aws_token', 'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}" }
+      ]
+    },
+    {
+      "_id": "req_aws_dlq",
+      "_type": "request",
+      "parentId": "fld_aws",
+      "name": "7. Reprocessar DLQ (AWS)",
+      "method": "POST",
+      "url": "https://5c0bm1ew3d.execute-api.us-east-2.amazonaws.com/api/v1/dlq/reprocessar?max_messages=10",
+      "headers": [
+        { "name": "Authorization", "value": "Bearer {% response 'body', 'req_aws_token', 'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}" }
+      ]
+    },
+    {
+      "_id": "req_local_health",
+      "_type": "request",
+      "parentId": "fld_local",
+      "name": "Health Check (Local)",
+      "method": "GET",
+      "url": "http://localhost:8000/health"
+    },
+    {
+      "_id": "req_local_token",
+      "_type": "request",
+      "parentId": "fld_local",
+      "name": "1. Obter Token JWT (Local)",
+      "method": "POST",
+      "url": "http://localhost:8000/api/v1/auth/token",
+      "headers": [{ "name": "Content-Type", "value": "application/json" }],
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"username\": \"admin\",\n  \"password\": \"admin123\"\n}"
+      }
+    },
+    {
+      "_id": "req_local_get_autor",
+      "_type": "request",
+      "parentId": "fld_local",
+      "name": "2. Consultar Autor 1 com Acordos (Local)",
+      "method": "GET",
+      "url": "http://localhost:8000/api/v1/usuarios/1/acordos",
+      "headers": [
+        { "name": "Authorization", "value": "Bearer {% response 'body', 'req_local_token', 'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}" }
+      ]
+    },
+    {
+      "_id": "req_local_api_key",
+      "_type": "request",
+      "parentId": "fld_local",
+      "name": "3. Consultar via X-API-Key Fixa (Local)",
+      "method": "GET",
+      "url": "http://localhost:8000/api/v1/usuarios/1/acordos",
+      "headers": [
+        { "name": "X-API-Key", "value": "chave-secreta-api-acordos-2026" }
+      ]
+    },
+    {
+      "_id": "req_local_stats",
+      "_type": "request",
+      "parentId": "fld_local",
+      "name": "4. Estatísticas Gerais (Local)",
+      "method": "GET",
+      "url": "http://localhost:8000/api/v1/estatisticas",
+      "headers": [
+        { "name": "Authorization", "value": "Bearer {% response 'body', 'req_local_token', 'b64::JC5hY2Nlc3NfdG9rZW4=::46b', 'never', 60 %}" }
+      ]
+    }
+  ]
+}
