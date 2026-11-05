@@ -58,12 +58,16 @@ def persist_autor_payload(
                     )
                     session.merge(doc_entity)
 
+    total_docs = sum(len(ac.get("documentos", [])) for ac in acordos_data)
+    nome_autor = autor_data.get("nome", "")
     logger.info(
-        "Autor, acordos e documentos persistidos com sucesso",
+        f"Autor {autor_id} ('{nome_autor}') persistido no RDS com sucesso ({len(acordos_data)} acordos, {total_docs} documentos)",
         extra={
             "extra_data": {
                 "autor_id": autor_id,
+                "nome_autor": nome_autor,
                 "qtd_acordos": len(acordos_data),
+                "qtd_documentos": total_docs,
             }
         },
     )
